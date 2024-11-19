@@ -1,2 +1,2 @@
 # stream_resp
-StreamRESP is a lightweight and efficient RESP (Redis Serialization Protocol) parser designed for streaming use cases.
+StreamRESP is a RESP (Redis Serialization Protocol) parser implemented using a finite state machine (FSM) approach. Designed for streaming scenarios.
