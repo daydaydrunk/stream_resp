@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use stream_resp::parser::{ParseError, Parser};
+use stream_resp::parser::Parser;
 use stream_resp::resp::RespValue;
 
 fn main() {
