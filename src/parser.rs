@@ -68,7 +68,72 @@ pub struct Parser {
     nested_stack: Vec<ParseState>,
 }
 
+/// A parser for RESP (REdis Serialization Protocol) messages.
+///
+/// # Example
+///
+/// ```
+/// use parser::Parser;
+///
+/// let mut parser = Parser::new(10, 1024);
+/// parser.read_buf(b"+OK\r\n");
+/// let result = parser.try_parse();
+/// assert_eq!(result.unwrap(), Some(RespValue::SimpleString("OK".into())));
+/// ```
+///
+/// # Methods
+///
+/// - `new(max_depth: usize, max_length: usize) -> Self`
+///   Creates a new `Parser` instance with the specified maximum depth and length.
+///
+/// - `read_buf(&mut self, buf: &[u8])`
+///   Reads a buffer of bytes into the parser's internal buffer.
+///
+/// - `get_buffer(&self) -> &BytesMut`
+///   Returns a reference to the parser's internal buffer.
+///
+/// - `clear_buffer(&mut self)`
+///   Clears the parser's internal buffer and resets the state.
+///
+/// - `try_parse(&mut self) -> ParseResult`
+///   Attempts to parse the data in the buffer and returns a `ParseResult`.
+///
+/// # Internal Methods
+///
+/// - `find_crlf(&self, start: usize) -> Option<usize>`
+///   Finds the position of the CRLF sequence starting from the given position.
+///
+/// - `handle_index(&mut self, index: usize) -> ParseState`
+///   Handles the initial parsing state based on the type marker at the given index.
+///
+/// - `handle_length(&mut self, pos: usize, value: i64, negative: bool, type_char: u8) -> ParseState`
+///   Handles the parsing of length-prefixed types (bulk strings and arrays).
+///
+/// - `handle_bulk_string(&mut self, start_pos: usize, remaining: usize) -> ParseState`
+///   Handles the parsing of bulk strings.
+///
+/// - `handle_array(&mut self, pos: usize, total: usize, current: usize, elements: Vec<RespValue<'static>>) -> ParseState`
+///   Handles the parsing of arrays.
+///
+/// - `handle_simple_string(&mut self, pos: usize) -> ParseState`
+///   Handles the parsing of simple strings.
+///
+/// - `handle_error(&mut self, pos: usize) -> ParseState`
+///   Handles the parsing of error messages.
+///
+/// - `handle_integer(&mut self, pos: usize) -> ParseState`
+///   Handles the parsing of integer values.
 impl Parser {
+    /// Creates a new parser instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_depth` - The maximum depth of nested arrays.
+    /// * `max_length` - The maximum length of bulk strings.
+    ///
+    /// # Returns
+    ///
+    /// Returns a new `Parser` instance.
     pub fn new(max_depth: usize, max_length: usize) -> Self {
         Parser {
             buffer: BytesMut::with_capacity(BUFFER_INIT_SIZE),
@@ -83,7 +148,12 @@ impl Parser {
         self.buffer.extend_from_slice(buf);
     }
 
-    pub fn get_buffer(&self) -> &BytesMut {
+    /// Returns a reference to the parser's internal buffer.
+    ///
+    /// # Returns
+    ///
+    /// A reference to the internal buffer.
+    pub fn buffer(&self) -> &BytesMut {
         &self.buffer
     }
 
@@ -342,12 +412,25 @@ impl Parser {
         }
     }
 
-    #[inline]
+    /// Clears the parser's internal buffer and resets the state.
     pub fn clear_buffer(&mut self) {
         self.buffer.clear();
         self.state = ParseState::Index { pos: 0 };
+        self.nested_stack.clear();
     }
 
+    /// Attempts to parse the data in the buffer and returns a `ParseResult`.
+    ///
+    /// This method will iterate through the buffer, checking for maximum iterations and depth.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `ParseResult` which is either a `RespValue` or a `ParseError`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError::InvalidFormat` if the maximum number of iterations is exceeded.
+    /// Returns `ParseError::InvalidDepth` if the maximum nested depth is exceeded.
     pub fn try_parse(&mut self) -> ParseResult {
         let mut iterations = 0;
 
