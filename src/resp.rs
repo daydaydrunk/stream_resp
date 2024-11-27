@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 
-// todo add is_null method for each type
 #[derive(Debug, Clone)]
 pub enum RespValue<'a> {
     SimpleString(Cow<'a, str>),
