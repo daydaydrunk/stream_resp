@@ -1,7 +1,7 @@
 use crate::resp::RespValue;
 use bytes::BytesMut;
 use std::borrow::Cow;
-use tracing::debug;
+use tracing::{debug, span, Level};
 
 const MAX_ITERATIONS: usize = 128;
 const CRLF_LEN: usize = 2;

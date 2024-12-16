@@ -1,13 +1,27 @@
 use crate::parser::{ParseError, Parser};
 use crate::resp::RespValue;
 use std::borrow::Cow;
+use tracing::{debug, Level};
+use tracing_subscriber::FmtSubscriber;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn set_logger() {
+        // Set up a subscriber with the desired log level
+        let subscriber = FmtSubscriber::builder()
+            .with_max_level(Level::DEBUG)
+            .finish();
+
+        // Initialize the global subscriber
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("setting default subscriber failed");
+    }
+
     #[test]
     fn test_simple_string() {
+        set_logger();
         let mut parser = Parser::new(100, 1000);
 
         // Basic case
