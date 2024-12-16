@@ -1,3 +1,4 @@
+#![warn(dead_code)]
 use crate::resp::RespValue;
 use std::borrow::Cow;
 

@@ -1,7 +1,8 @@
 use crate::resp::RespValue;
+use atoi::atoi;
 use bytes::BytesMut;
 use std::borrow::Cow;
-use tracing::{debug, span, Level};
+use tracing::debug;
 
 const MAX_ITERATIONS: usize = 128;
 const CRLF_LEN: usize = 2;
@@ -21,6 +22,7 @@ pub enum ParseError {
     Overflow,
     NotEnoughData,
     InvalidDepth,
+    InvalidUtf8,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -73,7 +75,8 @@ pub struct Parser {
 /// # Example
 ///
 /// ```
-/// use parser::Parser;
+/// use stream_resp::parser::Parser;
+/// use stream_resp::resp::RespValue;
 ///
 /// let mut parser = Parser::new(10, 1024);
 /// parser.read_buf(b"+OK\r\n");
@@ -157,20 +160,15 @@ impl Parser {
         &self.buffer
     }
 
-    #[inline]
+    #[inline(always)]
     fn find_crlf(&self, start: usize) -> Option<usize> {
-        let mut pos = start;
-        while pos < self.buffer.len().saturating_sub(1) {
-            match (self.buffer.get(pos), self.buffer.get(pos + 1)) {
-                (Some(&b'\r'), Some(&b'\n')) => return Some(pos),
-                (Some(_), _) => pos += 1,
-                _ => break,
-            }
-        }
-        None
+        self.buffer[start..]
+            .windows(2)
+            .position(|window| window == b"\r\n")
+            .map(|pos| pos + start)
     }
 
-    #[inline]
+    #[inline(always)]
     fn handle_index(&mut self, index: usize) -> ParseState {
         if index >= self.buffer.len() {
             return ParseState::Error(ParseError::UnexpectedEof);
@@ -282,46 +280,57 @@ impl Parser {
         };
     }
 
-    #[inline]
+    #[inline(always)]
     fn handle_bulk_string(&mut self, start_pos: usize, remaining: usize) -> ParseState {
+        // Early returns for special cases
         if remaining == 0 {
-            return ParseState::Complete(Some((RespValue::BulkString(None), 0)));
+            return ParseState::Complete(Some((RespValue::BulkString(None), start_pos)));
         }
 
         if remaining >= self.max_length {
             return ParseState::Error(ParseError::InvalidLength);
-        } else if remaining == NO_REMAINING {
-            return ParseState::Complete(Some((RespValue::BulkString(None), start_pos)));
         }
 
         let required_len = start_pos + remaining + CRLF_LEN;
         if self.buffer.len() < required_len {
             return ParseState::Error(ParseError::NotEnoughData);
         }
+        // Avoid copying by using slice reference
+        let string_slice = &self.buffer[start_pos..start_pos + remaining];
 
-        if self.buffer[start_pos + remaining] != CR
-            || self.buffer[start_pos + remaining + NEXT] != LF
-        {
-            return ParseState::Error(ParseError::InvalidFormat("Missing CRLF".into()));
+        // Fast path for ASCII-only strings
+        if string_slice.iter().all(|&b| b < 128) {
+            // Safe because we know it's ASCII
+            let string = unsafe { String::from_utf8_unchecked(string_slice.to_vec()) };
+            return ParseState::Complete(Some((
+                RespValue::BulkString(Some(string.into())),
+                start_pos + remaining + CRLF_LEN,
+            )));
         }
 
-        match String::from_utf8(self.buffer[start_pos..start_pos + remaining].to_vec()) {
-            Ok(content) => ParseState::Complete(Some((
-                RespValue::BulkString(Some(content.into())),
-                required_len,
+        // Fallback for non-ASCII strings
+        match std::str::from_utf8(string_slice) {
+            Ok(s) => ParseState::Complete(Some((
+                RespValue::BulkString(Some(s.to_string().into())),
+                start_pos + remaining + CRLF_LEN,
             ))),
-            Err(_) => ParseState::Error(ParseError::InvalidFormat("Invalid UTF-8".into())),
+            Err(_) => ParseState::Error(ParseError::InvalidUtf8),
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn handle_array(
         &mut self,
         pos: usize,
         total: usize,
         current: usize,
-        elements: Vec<RespValue<'static>>,
+        mut elements: Vec<RespValue<'static>>,
     ) -> ParseState {
+        // Pre-allocate vector capacity
+        if elements.capacity() < total {
+            elements.reserve(total - elements.capacity());
+        }
+
         if total == 0 {
             return ParseState::Complete(Some((RespValue::Array(None), pos)));
         }
@@ -343,7 +352,7 @@ impl Parser {
         ParseState::Index { pos }
     }
 
-    #[inline]
+    #[inline(always)]
     fn handle_simple_string(&mut self, pos: usize) -> ParseState {
         match self.find_crlf(pos) {
             Some(end_pos) => {
@@ -367,46 +376,52 @@ impl Parser {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn handle_integer(&mut self, pos: usize) -> ParseState {
         match self.find_crlf(pos) {
             Some(end_pos) => {
-                let mut value = 0i64;
-                let mut negative = false;
-                let mut start = pos;
-
-                match self.buffer.get(pos) {
-                    Some(&b'-') => {
-                        negative = true;
-                        start = pos + 1;
-                    }
-                    _ => {}
+                let bytes = &self.buffer[pos..end_pos];
+                // Check for decimal point to avoid incorrect integer parsing
+                if bytes.contains(&b'.') {
+                    return ParseState::Error(ParseError::InvalidFormat(
+                        "Found decimal point in integer".into(),
+                    ));
                 }
+                // Fast path for small numbers (1-4 digits)
+                if bytes.len() <= 4 {
+                    let mut value: i64 = 0;
+                    let mut start = 0;
+                    let negative = bytes[0] == b'-';
 
-                for &b in &self.buffer[start..end_pos] {
-                    match b {
-                        b'0'..=b'9' => {
-                            value = match value.checked_mul(10).and_then(|v| {
-                                if negative {
-                                    v.checked_sub((b - b'0') as i64)
-                                } else {
-                                    v.checked_add((b - b'0') as i64)
-                                }
-                            }) {
-                                Some(v) => v,
-                                None => {
-                                    return ParseState::Error(ParseError::Overflow);
-                                }
-                            };
-                        }
-                        _ => {
-                            return ParseState::Error(ParseError::InvalidFormat(
-                                "Invalid integer format".into(),
-                            ));
+                    if negative {
+                        start = 1;
+                    }
+
+                    for &byte in &bytes[start..] {
+                        match byte {
+                            b'0'..=b'9' => {
+                                value = value * 10 + (byte - b'0') as i64;
+                            }
+                            _ => {
+                                return ParseState::Error(ParseError::InvalidFormat(
+                                    "Invalid integer".into(),
+                                ))
+                            }
                         }
                     }
+                    return ParseState::Complete(Some((
+                        RespValue::Integer(if negative { -value } else { value }),
+                        end_pos + CRLF_LEN,
+                    )));
                 }
-                ParseState::Complete(Some((RespValue::Integer(value), end_pos + CRLF_LEN)))
+
+                // Fallback to atoi for larger numbers
+                match atoi::atoi::<i64>(bytes) {
+                    Some(value) => {
+                        ParseState::Complete(Some((RespValue::Integer(value), end_pos + CRLF_LEN)))
+                    }
+                    None => ParseState::Error(ParseError::InvalidFormat("Invalid integer".into())),
+                }
             }
             None => ParseState::Error(ParseError::UnexpectedEof),
         }

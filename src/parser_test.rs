@@ -1,7 +1,8 @@
+#![warn(dead_code)]
 use crate::parser::{ParseError, Parser};
 use crate::resp::RespValue;
 use std::borrow::Cow;
-use tracing::{debug, Level};
+use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
 #[cfg(test)]
@@ -21,7 +22,7 @@ mod tests {
 
     #[test]
     fn test_simple_string() {
-        set_logger();
+        //set_logger();
         let mut parser = Parser::new(100, 1000);
 
         // Basic case
@@ -298,7 +299,7 @@ mod tests {
 
         // Large string
         let large_string = "x".repeat(1000);
-        let message = format!("${}\r\n{}\r\n", large_string.len(), large_string);
+        let _message = format!("${}\r\n{}\r\n", large_string.len(), large_string);
 
         // Send length information in chunks
         parser.read_buf(format!("${}\r\n", large_string.len()).as_bytes());
@@ -327,7 +328,7 @@ mod tests {
         }
 
         // Large array
-        let mut large_array = String::from("*1000\r\n");
+        let large_array = String::from("*1000\r\n");
         parser.read_buf(large_array.as_bytes());
         match parser.try_parse() {
             Err(ParseError::UnexpectedEof) => (), // Expected to wait for more data
