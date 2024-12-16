@@ -8,7 +8,7 @@ To use `stream_resp` in your project, add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-stream_resp = "0.1.3"
+stream_resp = "0.1"
 ```
 
 ## Usage
