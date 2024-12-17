@@ -6,7 +6,7 @@ use tracing::debug;
 
 const MAX_ITERATIONS: usize = 128;
 const CRLF_LEN: usize = 2;
-const BUFFER_INIT_SIZE: usize = 4096;
+const DEFAULT_BUFFER_INIT_SIZE: usize = 4096;
 
 type ParseResult = Result<Option<RespValue<'static>>, ParseError>;
 
@@ -135,7 +135,7 @@ impl Parser {
     /// Returns a new `Parser` instance.
     pub fn new(max_depth: usize, max_length: usize) -> Self {
         Parser {
-            buffer: BytesMut::with_capacity(BUFFER_INIT_SIZE),
+            buffer: BytesMut::with_capacity(DEFAULT_BUFFER_INIT_SIZE),
             state: ParseState::Index { pos: 0 },
             max_length,
             max_depth,
@@ -144,6 +144,9 @@ impl Parser {
     }
 
     pub fn read_buf(&mut self, buf: &[u8]) {
+        if self.buffer.capacity().checked_sub(buf.len()).unwrap_or(0) <= 0 {
+            self.buffer.clear();
+        }
         self.buffer.extend_from_slice(buf);
     }
 
@@ -424,9 +427,8 @@ impl Parser {
     }
 
     /// Clears the parser's internal buffer and resets the state.
-    pub fn clear_buffer(&mut self) {
-        self.buffer.clear();
-        self.state = ParseState::Index { pos: 0 };
+    pub fn clear_buffer(&mut self, pos: usize) {
+        self.state = ParseState::Index { pos };
         self.nested_stack.clear();
     }
 
@@ -512,7 +514,7 @@ impl Parser {
                                 self.state = ParseState::Complete(Some((completed_result, pos)));
                                 continue;
                             } else {
-                                self.clear_buffer();
+                                self.clear_buffer(pos);
                                 if completed_result.is_none() {
                                     self.state = ParseState::Complete(None);
                                 } else {
@@ -523,7 +525,7 @@ impl Parser {
                     }
                     _ => {
                         if self.nested_stack.is_empty() {
-                            self.clear_buffer();
+                            self.clear_buffer(pos);
                             return Ok(Some(value));
                         }
                     }

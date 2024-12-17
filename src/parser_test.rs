@@ -736,4 +736,36 @@ mod tests {
             other => panic!("Expected BulkString, got {:?}", other),
         }
     }
+
+    #[test]
+    fn test_batch_processing() {
+        let mut parser = Parser::new(10, 1024);
+        let input = b"*3\r\n$6\r\nCONFIG\r\n$3\r\nGET\r\n$4\r\nsave\r\n*3\r\n$6\r\nCONFIG\r\n$3\r\nGET\r\n$10\r\nappendonly\r\n";
+
+        // First command: CONFIG GET save
+        parser.read_buf(input);
+        match parser.try_parse() {
+            Ok(Some(RespValue::Array(Some(array)))) => {
+                assert_eq!(array.len(), 3);
+                assert_eq!(array[0], RespValue::BulkString(Some("CONFIG".into())));
+                assert_eq!(array[1], RespValue::BulkString(Some("GET".into())));
+                assert_eq!(array[2], RespValue::BulkString(Some("save".into())));
+            }
+            other => panic!("Expected Array, got {:?}", other),
+        }
+
+        // Second command: CONFIG GET appendonly
+        match parser.try_parse() {
+            Ok(Some(RespValue::Array(Some(array)))) => {
+                assert_eq!(array.len(), 3);
+                assert_eq!(array[0], RespValue::BulkString(Some("CONFIG".into())));
+                assert_eq!(array[1], RespValue::BulkString(Some("GET".into())));
+                assert_eq!(array[2], RespValue::BulkString(Some("appendonly".into())));
+            }
+            other => panic!("Expected Array, got {:?}", other),
+        }
+
+        // No more commands
+        assert_eq!(parser.try_parse(), Err(ParseError::UnexpectedEof));
+    }
 }
