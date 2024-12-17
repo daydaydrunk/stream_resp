@@ -22,6 +22,7 @@ pub enum ParseError {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+#[repr(C, align(8))]
 pub enum ParseState {
     Index {
         pos: usize,
@@ -201,7 +202,7 @@ impl Parser {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn handle_length(
         &mut self,
         pos: usize,
@@ -323,29 +324,23 @@ impl Parser {
         pos: usize,
         total: usize,
         current: usize,
-        mut elements: Vec<RespValue<'static>>,
+        elements: Vec<RespValue<'static>>,
     ) -> ParseState {
-        // Pre-allocate vector capacity
-        if elements.capacity() < total {
-            elements.reserve(total - elements.capacity());
-        }
-
         if total == 0 {
             return ParseState::Complete(Some((RespValue::Array(None), pos)));
         }
+
         if current > total {
             return ParseState::Complete(Some((RespValue::Array(Some(elements)), pos)));
         }
 
         // Store current array state
-        let arr = ParseState::ReadingArray {
+        self.nested_stack.push(ParseState::ReadingArray {
             pos,
             total,
-            elements,
             current,
-        };
-
-        self.nested_stack.push(arr);
+            elements,
+        });
 
         // Start parsing next element from current position
         ParseState::Index { pos }
@@ -355,21 +350,55 @@ impl Parser {
     fn handle_simple_string(&mut self, pos: usize) -> ParseState {
         match self.find_crlf(pos) {
             Some(end_pos) => {
-                let bytes = self.buffer[pos..end_pos].to_vec();
-                let string = String::from_utf8_lossy(&bytes).into_owned().into();
-                ParseState::Complete(Some((RespValue::SimpleString(string), end_pos)))
+                let bytes = &self.buffer[pos..end_pos];
+
+                // Fast path for ASCII-only strings
+                if bytes.iter().all(|&b| b < 128) {
+                    // Safe because we know it's ASCII
+                    let string = unsafe { String::from_utf8_unchecked(bytes.to_vec()) };
+                    return ParseState::Complete(Some((
+                        RespValue::SimpleString(string.into()),
+                        end_pos + CRLF_LEN,
+                    )));
+                }
+
+                // Fallback for non-ASCII strings
+                match std::str::from_utf8(bytes) {
+                    Ok(s) => ParseState::Complete(Some((
+                        RespValue::SimpleString(s.to_string().into()),
+                        end_pos + CRLF_LEN,
+                    ))),
+                    Err(_) => ParseState::Error(ParseError::InvalidUtf8),
+                }
             }
             None => ParseState::Error(ParseError::UnexpectedEof),
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn handle_error(&mut self, pos: usize) -> ParseState {
         match self.find_crlf(pos) {
             Some(end_pos) => {
-                let bytes = self.buffer[pos..end_pos].to_vec();
-                let string = String::from_utf8_lossy(&bytes).into_owned().into();
-                ParseState::Complete(Some((RespValue::Error(string), end_pos)))
+                let bytes = &self.buffer[pos..end_pos];
+
+                // Fast path for ASCII-only error messages
+                if bytes.iter().all(|&b| b < 128) {
+                    // Safe because we know it's ASCII
+                    let error = unsafe { String::from_utf8_unchecked(bytes.to_vec()) };
+                    return ParseState::Complete(Some((
+                        RespValue::Error(error.into()),
+                        end_pos + CRLF_LEN,
+                    )));
+                }
+
+                // Fallback for non-ASCII
+                match std::str::from_utf8(bytes) {
+                    Ok(s) => ParseState::Complete(Some((
+                        RespValue::Error(s.to_string().into()),
+                        end_pos + CRLF_LEN,
+                    ))),
+                    Err(_) => ParseState::Error(ParseError::InvalidUtf8),
+                }
             }
             None => ParseState::Error(ParseError::UnexpectedEof),
         }
@@ -475,7 +504,7 @@ impl Parser {
                     total,
                     elements,
                     current,
-                } => self.handle_array(*pos, *total, *current, elements.clone()),
+                } => self.handle_array(*pos, *total, *current, elements.to_owned()),
                 ParseState::ReadingLength {
                     pos,
                     value,
