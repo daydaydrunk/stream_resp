@@ -316,4 +316,13 @@ mod tests {
         assert!(bytes.starts_with(b"*2\r\n"));
         assert!(bytes.len() > 20);
     }
+
+    #[test]
+    fn test_resp_value_size() {
+        println!("RespValue size: {}", std::mem::size_of::<RespValue>());
+        println!("RespValue alignment: {}", std::mem::align_of::<RespValue>());
+
+        // Ensure no unexpected padding
+        assert!(std::mem::size_of::<RespValue>() % 8 == 0);
+    }
 }

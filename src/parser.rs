@@ -6,7 +6,7 @@ use tracing::debug;
 
 const MAX_ITERATIONS: usize = 128;
 const CRLF_LEN: usize = 2;
-const BUFFER_INIT_SIZE: usize = 4096;
+const DEFAULT_BUFFER_INIT_SIZE: usize = 4096;
 
 type ParseResult = Result<Option<RespValue<'static>>, ParseError>;
 
@@ -22,6 +22,7 @@ pub enum ParseError {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+#[repr(C, align(8))]
 pub enum ParseState {
     Index {
         pos: usize,
@@ -135,7 +136,7 @@ impl Parser {
     /// Returns a new `Parser` instance.
     pub fn new(max_depth: usize, max_length: usize) -> Self {
         Parser {
-            buffer: BytesMut::with_capacity(BUFFER_INIT_SIZE),
+            buffer: BytesMut::with_capacity(DEFAULT_BUFFER_INIT_SIZE),
             state: ParseState::Index { pos: 0 },
             max_length,
             max_depth,
@@ -144,6 +145,9 @@ impl Parser {
     }
 
     pub fn read_buf(&mut self, buf: &[u8]) {
+        if self.buffer.capacity().checked_sub(buf.len()).unwrap_or(0) <= 0 {
+            self.buffer.clear();
+        }
         self.buffer.extend_from_slice(buf);
     }
 
@@ -198,7 +202,7 @@ impl Parser {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn handle_length(
         &mut self,
         pos: usize,
@@ -320,29 +324,23 @@ impl Parser {
         pos: usize,
         total: usize,
         current: usize,
-        mut elements: Vec<RespValue<'static>>,
+        elements: Vec<RespValue<'static>>,
     ) -> ParseState {
-        // Pre-allocate vector capacity
-        if elements.capacity() < total {
-            elements.reserve(total - elements.capacity());
-        }
-
         if total == 0 {
             return ParseState::Complete(Some((RespValue::Array(None), pos)));
         }
+
         if current > total {
             return ParseState::Complete(Some((RespValue::Array(Some(elements)), pos)));
         }
 
         // Store current array state
-        let arr = ParseState::ReadingArray {
+        self.nested_stack.push(ParseState::ReadingArray {
             pos,
             total,
-            elements,
             current,
-        };
-
-        self.nested_stack.push(arr);
+            elements,
+        });
 
         // Start parsing next element from current position
         ParseState::Index { pos }
@@ -352,21 +350,55 @@ impl Parser {
     fn handle_simple_string(&mut self, pos: usize) -> ParseState {
         match self.find_crlf(pos) {
             Some(end_pos) => {
-                let bytes = self.buffer[pos..end_pos].to_vec();
-                let string = String::from_utf8_lossy(&bytes).into_owned().into();
-                ParseState::Complete(Some((RespValue::SimpleString(string), end_pos)))
+                let bytes = &self.buffer[pos..end_pos];
+
+                // Fast path for ASCII-only strings
+                if bytes.iter().all(|&b| b < 128) {
+                    // Safe because we know it's ASCII
+                    let string = unsafe { String::from_utf8_unchecked(bytes.to_vec()) };
+                    return ParseState::Complete(Some((
+                        RespValue::SimpleString(string.into()),
+                        end_pos + CRLF_LEN,
+                    )));
+                }
+
+                // Fallback for non-ASCII strings
+                match std::str::from_utf8(bytes) {
+                    Ok(s) => ParseState::Complete(Some((
+                        RespValue::SimpleString(s.to_string().into()),
+                        end_pos + CRLF_LEN,
+                    ))),
+                    Err(_) => ParseState::Error(ParseError::InvalidUtf8),
+                }
             }
             None => ParseState::Error(ParseError::UnexpectedEof),
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn handle_error(&mut self, pos: usize) -> ParseState {
         match self.find_crlf(pos) {
             Some(end_pos) => {
-                let bytes = self.buffer[pos..end_pos].to_vec();
-                let string = String::from_utf8_lossy(&bytes).into_owned().into();
-                ParseState::Complete(Some((RespValue::Error(string), end_pos)))
+                let bytes = &self.buffer[pos..end_pos];
+
+                // Fast path for ASCII-only error messages
+                if bytes.iter().all(|&b| b < 128) {
+                    // Safe because we know it's ASCII
+                    let error = unsafe { String::from_utf8_unchecked(bytes.to_vec()) };
+                    return ParseState::Complete(Some((
+                        RespValue::Error(error.into()),
+                        end_pos + CRLF_LEN,
+                    )));
+                }
+
+                // Fallback for non-ASCII
+                match std::str::from_utf8(bytes) {
+                    Ok(s) => ParseState::Complete(Some((
+                        RespValue::Error(s.to_string().into()),
+                        end_pos + CRLF_LEN,
+                    ))),
+                    Err(_) => ParseState::Error(ParseError::InvalidUtf8),
+                }
             }
             None => ParseState::Error(ParseError::UnexpectedEof),
         }
@@ -424,9 +456,8 @@ impl Parser {
     }
 
     /// Clears the parser's internal buffer and resets the state.
-    pub fn clear_buffer(&mut self) {
-        self.buffer.clear();
-        self.state = ParseState::Index { pos: 0 };
+    pub fn clear_buffer(&mut self, pos: usize) {
+        self.state = ParseState::Index { pos };
         self.nested_stack.clear();
     }
 
@@ -473,7 +504,7 @@ impl Parser {
                     total,
                     elements,
                     current,
-                } => self.handle_array(*pos, *total, *current, elements.clone()),
+                } => self.handle_array(*pos, *total, *current, elements.to_owned()),
                 ParseState::ReadingLength {
                     pos,
                     value,
@@ -512,7 +543,7 @@ impl Parser {
                                 self.state = ParseState::Complete(Some((completed_result, pos)));
                                 continue;
                             } else {
-                                self.clear_buffer();
+                                self.clear_buffer(pos);
                                 if completed_result.is_none() {
                                     self.state = ParseState::Complete(None);
                                 } else {
@@ -523,7 +554,7 @@ impl Parser {
                     }
                     _ => {
                         if self.nested_stack.is_empty() {
-                            self.clear_buffer();
+                            self.clear_buffer(pos);
                             return Ok(Some(value));
                         }
                     }

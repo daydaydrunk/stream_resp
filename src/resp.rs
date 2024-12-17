@@ -1,21 +1,29 @@
 use std::borrow::Cow;
 
 #[derive(Debug, Clone)]
+#[repr(C, align(8))]
 pub enum RespValue<'a> {
-    SimpleString(Cow<'a, str>),
-    Error(Cow<'a, str>),
-    Integer(i64),
-    BulkString(Option<Cow<'a, str>>),
+    // Largest variants first (16 bytes or more)
     Array(Option<Vec<RespValue<'a>>>),
-    Null,
-    Boolean(bool),
-    Double(f64),
-    BigNumber(Cow<'a, str>),
-    BulkError(Option<Cow<'a, str>>),
-    VerbatimString(Option<Cow<'a, str>>),
     Map(Option<Vec<(RespValue<'a>, RespValue<'a>)>>),
     Set(Option<Vec<RespValue<'a>>>),
     Push(Option<Vec<RespValue<'a>>>),
+
+    // Variants with Cow (16 bytes)
+    SimpleString(Cow<'a, str>),
+    Error(Cow<'a, str>),
+    BulkString(Option<Cow<'a, str>>),
+    BulkError(Option<Cow<'a, str>>),
+    VerbatimString(Option<Cow<'a, str>>),
+    BigNumber(Cow<'a, str>),
+
+    // 8-byte variants
+    Integer(i64),
+    Double(f64),
+
+    // Small variants (1 byte)
+    Boolean(bool),
+    Null,
 }
 
 impl PartialEq for RespValue<'_> {
@@ -186,6 +194,12 @@ impl<'a> Into<Vec<(RespValue<'a>, RespValue<'a>)>> for RespValue<'a> {
             RespValue::Map(value) => value.unwrap().clone(),
             _ => panic!("Cannot convert {:?} to Vec<(RespValue, RespValue)>", self),
         }
+    }
+}
+
+impl<'a> Default for RespValue<'a> {
+    fn default() -> Self {
+        RespValue::Null
     }
 }
 
