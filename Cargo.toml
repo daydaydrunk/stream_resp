@@ -1,6 +1,6 @@
 [package]
 name = "stream_resp"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 authors = ["HanLin Chai <take3812@gmail.com>"]
 description = "StreamRESP is a RESP (Redis Serialization Protocol) parser implemented using a finite state machine (FSM) approach. Designed for streaming scenarios."
@@ -31,7 +31,7 @@ debug = true
 opt-level = 3
 lto = true
 codegen-units = 1
-debug = true
+debug = false
 panic = "abort"
 strip = true
 
