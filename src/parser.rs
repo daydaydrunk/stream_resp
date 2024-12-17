@@ -7,10 +7,6 @@ use tracing::debug;
 const MAX_ITERATIONS: usize = 128;
 const CRLF_LEN: usize = 2;
 const BUFFER_INIT_SIZE: usize = 4096;
-const CR: u8 = b'\r';
-const LF: u8 = b'\n';
-const NEXT: usize = 1;
-const NO_REMAINING: usize = 0;
 
 type ParseResult = Result<Option<RespValue<'static>>, ParseError>;
 

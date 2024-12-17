@@ -1,4 +1,3 @@
-#![warn(dead_code)]
 use crate::parser::{ParseError, Parser};
 use crate::resp::RespValue;
 use std::borrow::Cow;
@@ -9,6 +8,7 @@ use tracing_subscriber::FmtSubscriber;
 mod tests {
     use super::*;
 
+    #[allow(dead_code)]
     fn set_logger() {
         // Set up a subscriber with the desired log level
         let subscriber = FmtSubscriber::builder()
@@ -18,6 +18,23 @@ mod tests {
         // Initialize the global subscriber
         tracing::subscriber::set_global_default(subscriber)
             .expect("setting default subscriber failed");
+    }
+
+    #[test]
+    fn test_with_debug_log() {
+        //set_logger();
+        let mut parser = Parser::new(100, 1000);
+
+        parser.read_buf(b"+simple string\r\n");
+        let result = match parser.try_parse() {
+            Ok(Some(val)) => val,
+            Ok(None) => panic!("Expected complete value"),
+            Err(e) => panic!("Parse error: {:?}", e),
+        };
+        assert_eq!(
+            result,
+            RespValue::SimpleString(Cow::Borrowed("simple string"))
+        );
     }
 
     #[test]
