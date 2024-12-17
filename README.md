@@ -10,6 +10,12 @@ To use `stream_resp` in your project, add the following to your `Cargo.toml`:
 [dependencies]
 stream_resp = "0.1"
 ```
+Enabling jemalloc
+If you want to enable jemalloc for better memory allocation performance, you can enable the jemalloc feature in your Cargo.toml:
+```toml
+[dependencies]
+stream_resp = { version = "0.1", features = ["jemalloc"] }
+```
 
 ## Usage
 
