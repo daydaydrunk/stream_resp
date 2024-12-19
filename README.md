@@ -21,6 +21,12 @@ stream_resp = { version = "0.1", features = ["jemalloc"] }
 
 Here are some examples demonstrating how to use the `stream_resp` parser.
 
+### Example 1: Basic usages
+```rust
+        let value = RespValue::Array(Some(vec![RespValue::Integer(1), RespValue::Integer(2)]));
+        assert_eq!(value.as_bytes(), b"*2\r\n:1\r\n:2\r\n");
+```
+
 ### Example 1: Streaming RESP Messages over TCP
 ```rust
 use std::net::{TcpListener, TcpStream};
