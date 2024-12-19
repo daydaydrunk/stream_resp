@@ -21,7 +21,59 @@ stream_resp = { version = "0.1", features = ["jemalloc"] }
 
 Here are some examples demonstrating how to use the `stream_resp` parser.
 
-### Example 1: Parsing Complete RESP Messages
+### Example 1: Streaming RESP Messages over TCP
+```rust
+use std::net::{TcpListener, TcpStream};
+use std::io::{Read, Write};
+use stream_resp::parser::{ParseError, Parser};
+use stream_resp::resp::RespValue;
+
+fn handle_client(mut stream: TcpStream) {
+    let mut parser = Parser::new(100, 1000);
+    let mut buffer = [0; 512];
+
+    loop {
+        match stream.read(&mut buffer) {
+            Ok(0) => break, // Connection closed
+            Ok(n) => {
+                parser.read_buf(&buffer[..n]);
+                while let Ok(Some((resp, _))) = parser.try_parse() {
+                    println!("Parsed RESP value: {:?}", resp);
+                    // Echo the parsed RESP value back to the client
+                    let response = format!("{:?}\r\n", resp);
+                    stream.write_all(response.as_bytes()).unwrap();
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to read from socket: {:?}", e);
+                break;
+            }
+        }
+    }
+}
+
+fn main() -> std::io::Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:6379")?;
+    println!("Server listening on port 6379");
+
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                std::thread::spawn(|| {
+                    handle_client(stream);
+                });
+            }
+            Err(e) => {
+                eprintln!("Failed to accept connection: {:?}", e);
+            }
+        }
+    }
+
+    Ok(())
+}
+```
+
+### Example 2: Parsing Complete RESP Messages
 
 ```rust
 use std::borrow::Cow;
@@ -52,7 +104,7 @@ fn main() {
 }
 ```
 
-### Example 2: Parsing Incomplete RESP Messages in Chunks
+### Example 3: Parsing Incomplete RESP Messages in Chunks
 
 ```rust
 use std::borrow::Cow;
