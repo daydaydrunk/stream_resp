@@ -170,6 +170,41 @@ fn main() {
 }
 ```
 
+## Benchmarks
+
+The project includes performance benchmarks for the RESP parser. To run the benchmarks:
+
+```bash
+# Run all benchmarks
+cargo bench
+
+# Run a specific benchmark group
+cargo bench --bench parser_benchmark -- "RESP Parser"
+
+# Run a specific benchmark test
+cargo bench --bench parser_benchmark -- "RESP Parser/parse/simple_string"
+```
+
+The benchmark results will be displayed in your terminal. Detailed HTML reports will be generated in the `target/criterion` directory, which you can open in a web browser to see more detailed performance information.
+
+## Viewing Benchmark Results
+
+After running the benchmarks, you can find detailed reports in:
+```
+target/criterion/report/index.html
+```
+
+The benchmarks measure parsing performance across various RESP data types and scenarios including:
+- Simple strings, errors, integers
+- Bulk strings (empty, null, large)
+- Arrays (simple, nested, large)
+- Real-world commands
+- Batched commands
+- Chunked parsing
+
+Benchmark results will be displayed in the terminal and detailed HTML reports are generated in the 
+`target/criterion` directory.
+
 ## Contributing
 
 Contributions are welcome! Please open an issue or submit a pull request on GitHub.
