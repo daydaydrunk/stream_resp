@@ -543,7 +543,7 @@ impl Parser {
                         } else {
                             let mut elements_vec = Vec::new();
                             if let ParseState::ReadingArray {
-                                elements: ref mut arr_elements,
+                                elements: arr_elements,
                                 ..
                             } = self.nested_stack.last_mut().unwrap()
                             {
