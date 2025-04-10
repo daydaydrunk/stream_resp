@@ -1,10 +1,10 @@
 use crate::resp::RespValue;
-use atoi::atoi;
-use bytes::BytesMut;
+use bytes::{Buf, BytesMut}; // Add Buf trait
+use memchr::memchr;
 use std::borrow::Cow;
 use tracing::debug;
 
-const MAX_ITERATIONS: usize = 128;
+const MAX_ITERATIONS: usize = 1024;
 const CRLF_LEN: usize = 2;
 const DEFAULT_BUFFER_INIT_SIZE: usize = 4096;
 
@@ -145,9 +145,25 @@ impl Parser {
     }
 
     pub fn read_buf(&mut self, buf: &[u8]) {
-        if self.buffer.capacity().checked_sub(buf.len()).unwrap_or(0) <= 0 {
-            self.buffer.clear();
+        // Create more efficient sliding window buffer
+        if self.buffer.len() > 0 && self.buffer.capacity() < self.buffer.len() + buf.len() {
+            // If we've processed part of the data, we can keep the unprocessed part
+            if let ParseState::Index { pos } = self.state {
+                if pos > 0 {
+                    // Create a new buffer with the remaining data
+                    let remaining = self.buffer.split_off(pos);
+                    self.buffer = remaining;
+                    self.state = ParseState::Index { pos: 0 };
+                }
+            }
         }
+
+        // If the buffer is still too small, consider clearing it
+        if self.buffer.capacity() < buf.len() {
+            self.buffer.clear();
+            self.buffer.reserve(buf.len() + DEFAULT_BUFFER_INIT_SIZE);
+        }
+
         self.buffer.extend_from_slice(buf);
     }
 
@@ -162,10 +178,18 @@ impl Parser {
 
     #[inline(always)]
     fn find_crlf(&self, start: usize) -> Option<usize> {
-        self.buffer[start..]
-            .windows(2)
-            .position(|window| window == b"\r\n")
-            .map(|pos| pos + start)
+        // Use memchr's more optimized implementation
+        let buf = &self.buffer[start..];
+        let r_position = memchr(b'\r', buf)?;
+        let pos = start + r_position;
+
+        // Check if there's a \n after the \r
+        if pos + 1 < self.buffer.len() && self.buffer[pos + 1] == b'\n' {
+            Some(pos)
+        } else {
+            // Keep searching past this \r
+            self.find_crlf(pos + 1)
+        }
     }
 
     #[inline(always)]
@@ -284,7 +308,7 @@ impl Parser {
     fn handle_bulk_string(&mut self, start_pos: usize, remaining: usize) -> ParseState {
         // Early returns for special cases
         if remaining == 0 {
-            return ParseState::Complete(Some((RespValue::BulkString(None), start_pos)));
+            return ParseState::Complete(Some((RespValue::BulkString(None), start_pos + CRLF_LEN)));
         }
 
         if remaining >= self.max_length {
@@ -295,27 +319,34 @@ impl Parser {
         if self.buffer.len() < required_len {
             return ParseState::Error(ParseError::NotEnoughData);
         }
-        // Avoid copying by using slice reference
+
+        // Check terminator first to fail fast
+        if self.buffer[start_pos + remaining] != b'\r'
+            || self.buffer[start_pos + remaining + 1] != b'\n'
+        {
+            return ParseState::Error(ParseError::InvalidFormat("Missing CRLF terminator".into()));
+        }
+
+        // Create string view
         let string_slice = &self.buffer[start_pos..start_pos + remaining];
 
-        // Fast path for ASCII-only strings
-        if string_slice.iter().all(|&b| b < 128) {
-            // Safe because we know it's ASCII
-            let string = unsafe { String::from_utf8_unchecked(string_slice.to_vec()) };
-            return ParseState::Complete(Some((
-                RespValue::BulkString(Some(string.into())),
-                start_pos + remaining + CRLF_LEN,
-            )));
-        }
+        // Optimize ASCII check
+        let is_ascii = string_slice.iter().all(|&b| b < 128);
 
-        // Fallback for non-ASCII strings
-        match std::str::from_utf8(string_slice) {
-            Ok(s) => ParseState::Complete(Some((
-                RespValue::BulkString(Some(s.to_string().into())),
-                start_pos + remaining + CRLF_LEN,
-            ))),
-            Err(_) => ParseState::Error(ParseError::InvalidUtf8),
-        }
+        // Build result efficiently based on content type
+        let result = if is_ascii {
+            // Fast path for ASCII
+            let s = unsafe { std::str::from_utf8_unchecked(string_slice) }.to_string();
+            RespValue::BulkString(Some(Cow::Owned(s)))
+        } else {
+            // Only do UTF-8 validation for non-ASCII
+            match std::str::from_utf8(string_slice) {
+                Ok(s) => RespValue::BulkString(Some(Cow::Owned(s.to_string()))),
+                Err(_) => return ParseState::Error(ParseError::InvalidUtf8),
+            }
+        };
+
+        ParseState::Complete(Some((result, start_pos + remaining + CRLF_LEN)))
     }
 
     #[inline(always)]
@@ -352,24 +383,13 @@ impl Parser {
             Some(end_pos) => {
                 let bytes = &self.buffer[pos..end_pos];
 
-                // Fast path for ASCII-only strings
-                if bytes.iter().all(|&b| b < 128) {
-                    // Safe because we know it's ASCII
-                    let string = unsafe { String::from_utf8_unchecked(bytes.to_vec()) };
-                    return ParseState::Complete(Some((
-                        RespValue::SimpleString(string.into()),
-                        end_pos + CRLF_LEN,
-                    )));
-                }
+                // Use from_utf8_lossy to directly create Cow<str>
+                let string = String::from_utf8_lossy(bytes).into_owned();
 
-                // Fallback for non-ASCII strings
-                match std::str::from_utf8(bytes) {
-                    Ok(s) => ParseState::Complete(Some((
-                        RespValue::SimpleString(s.to_string().into()),
-                        end_pos + CRLF_LEN,
-                    ))),
-                    Err(_) => ParseState::Error(ParseError::InvalidUtf8),
-                }
+                ParseState::Complete(Some((
+                    RespValue::SimpleString(Cow::Owned(string)),
+                    end_pos + CRLF_LEN,
+                )))
             }
             None => ParseState::Error(ParseError::UnexpectedEof),
         }
@@ -381,24 +401,13 @@ impl Parser {
             Some(end_pos) => {
                 let bytes = &self.buffer[pos..end_pos];
 
-                // Fast path for ASCII-only error messages
-                if bytes.iter().all(|&b| b < 128) {
-                    // Safe because we know it's ASCII
-                    let error = unsafe { String::from_utf8_unchecked(bytes.to_vec()) };
-                    return ParseState::Complete(Some((
-                        RespValue::Error(error.into()),
-                        end_pos + CRLF_LEN,
-                    )));
-                }
+                // Use from_utf8_lossy to directly create Cow<str>
+                let error = String::from_utf8_lossy(bytes).into_owned();
 
-                // Fallback for non-ASCII
-                match std::str::from_utf8(bytes) {
-                    Ok(s) => ParseState::Complete(Some((
-                        RespValue::Error(s.to_string().into()),
-                        end_pos + CRLF_LEN,
-                    ))),
-                    Err(_) => ParseState::Error(ParseError::InvalidUtf8),
-                }
+                ParseState::Complete(Some((
+                    RespValue::Error(Cow::Owned(error)),
+                    end_pos + CRLF_LEN,
+                )))
             }
             None => ParseState::Error(ParseError::UnexpectedEof),
         }
@@ -409,41 +418,35 @@ impl Parser {
         match self.find_crlf(pos) {
             Some(end_pos) => {
                 let bytes = &self.buffer[pos..end_pos];
-                // Check for decimal point to avoid incorrect integer parsing
-                if bytes.contains(&b'.') {
-                    return ParseState::Error(ParseError::InvalidFormat(
-                        "Found decimal point in integer".into(),
-                    ));
-                }
-                // Fast path for small numbers (1-4 digits)
-                if bytes.len() <= 4 {
+
+                // 小整数快速路径
+                if bytes.len() <= 10 {
                     let mut value: i64 = 0;
                     let mut start = 0;
-                    let negative = bytes[0] == b'-';
+                    let negative = bytes.first() == Some(&b'-');
 
                     if negative {
                         start = 1;
                     }
 
                     for &byte in &bytes[start..] {
-                        match byte {
-                            b'0'..=b'9' => {
-                                value = value * 10 + (byte - b'0') as i64;
-                            }
-                            _ => {
-                                return ParseState::Error(ParseError::InvalidFormat(
-                                    "Invalid integer".into(),
-                                ))
-                            }
+                        if byte < b'0' || byte > b'9' {
+                            return ParseState::Error(ParseError::InvalidFormat(
+                                "Invalid integer".into(),
+                            ));
                         }
+                        if value > i64::MAX / 10 {
+                            return ParseState::Error(ParseError::Overflow);
+                        }
+                        value = value * 10 + (byte - b'0') as i64;
                     }
+
                     return ParseState::Complete(Some((
                         RespValue::Integer(if negative { -value } else { value }),
                         end_pos + CRLF_LEN,
                     )));
                 }
 
-                // Fallback to atoi for larger numbers
                 match atoi::atoi::<i64>(bytes) {
                     Some(value) => {
                         ParseState::Complete(Some((RespValue::Integer(value), end_pos + CRLF_LEN)))
@@ -497,29 +500,30 @@ impl Parser {
                 self.nested_stack.len()
             );
 
-            let next_state = match &self.state {
-                ParseState::Index { pos } => self.handle_index(*pos),
+            let current_state = self.state.clone();
+            let next_state = match current_state {
+                ParseState::Index { pos } => self.handle_index(pos),
                 ParseState::ReadingArray {
                     pos,
                     total,
-                    elements,
                     current,
-                } => self.handle_array(*pos, *total, *current, elements.to_owned()),
+                    elements,
+                } => self.handle_array(pos, total, current, elements),
                 ParseState::ReadingLength {
                     pos,
                     value,
                     negative,
                     type_char,
-                } => self.handle_length(*pos, *value, *negative, *type_char),
+                } => self.handle_length(pos, value, negative, type_char),
                 ParseState::ReadingBulkString {
                     start_pos,
                     remaining,
-                } => self.handle_bulk_string(*start_pos, *remaining),
-                ParseState::ReadingSimpleString { pos } => self.handle_simple_string(*pos),
-                ParseState::ReadingError { pos } => self.handle_error(*pos),
-                ParseState::ReadingInteger { pos } => self.handle_integer(*pos),
-                ParseState::Error(error) => ParseState::Error(error.clone()),
-                ParseState::Complete(value) => ParseState::Complete(value.clone()),
+                } => self.handle_bulk_string(start_pos, remaining),
+                ParseState::ReadingSimpleString { pos } => self.handle_simple_string(pos),
+                ParseState::ReadingError { pos } => self.handle_error(pos),
+                ParseState::ReadingInteger { pos } => self.handle_integer(pos),
+                ParseState::Error(error) => ParseState::Error(error),
+                ParseState::Complete(value) => ParseState::Complete(value),
             };
 
             match next_state {
@@ -537,7 +541,16 @@ impl Parser {
                             self.state = ParseState::Index { pos };
                             continue;
                         } else {
-                            let completed_result = RespValue::Array(Some(elements.clone()));
+                            let mut elements_vec = Vec::new();
+                            if let ParseState::ReadingArray {
+                                elements: ref mut arr_elements,
+                                ..
+                            } = self.nested_stack.last_mut().unwrap()
+                            {
+                                std::mem::swap(arr_elements, &mut elements_vec);
+                            }
+
+                            let completed_result = RespValue::Array(Some(elements_vec));
                             if !self.nested_stack.is_empty() {
                                 self.nested_stack.pop();
                                 self.state = ParseState::Complete(Some((completed_result, pos)));
