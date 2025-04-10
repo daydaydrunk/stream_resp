@@ -325,4 +325,513 @@ mod tests {
         // Ensure no unexpected padding
         assert!(std::mem::size_of::<RespValue>() % 8 == 0);
     }
+
+    #[test]
+    fn test_from_string() {
+        let value: RespValue = "test".to_string().into();
+        assert_eq!(
+            value,
+            RespValue::SimpleString(Cow::Owned("test".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_from_str() {
+        let value: RespValue = "test".into();
+        assert_eq!(value, RespValue::SimpleString(Cow::Borrowed("test")));
+    }
+
+    #[test]
+    fn test_from_i64() {
+        let value: RespValue = 42.into();
+        assert_eq!(value, RespValue::Integer(42));
+    }
+
+    #[test]
+    fn test_from_option_string() {
+        let value: RespValue = Some("test".to_string()).into();
+        assert_eq!(
+            value,
+            RespValue::BulkString(Some(Cow::Owned("test".to_string())))
+        );
+
+        let value: RespValue = None.into();
+        assert_eq!(value, RespValue::BulkString(None));
+    }
+
+    #[test]
+    fn test_from_vec_resp_value() {
+        let value: RespValue = vec![RespValue::Integer(1), RespValue::Integer(2)].into();
+        assert_eq!(
+            value,
+            RespValue::Array(Some(vec![RespValue::Integer(1), RespValue::Integer(2)]))
+        );
+    }
+
+    #[test]
+    fn test_from_bool() {
+        let value: RespValue = true.into();
+        assert_eq!(value, RespValue::Boolean(true));
+    }
+
+    #[test]
+    fn test_from_f64() {
+        let value: RespValue = 3.14.into();
+        assert_eq!(value, RespValue::Double(3.14));
+    }
+
+    #[test]
+    fn test_from_tuple_resp_value() {
+        let value: RespValue = (
+            RespValue::SimpleString(Cow::Borrowed("key")),
+            RespValue::Integer(42),
+        )
+            .into();
+        assert_eq!(
+            value,
+            RespValue::Map(Some(vec![(
+                RespValue::SimpleString(Cow::Borrowed("key")),
+                RespValue::Integer(42)
+            )]))
+        );
+    }
+
+    #[test]
+    fn test_from_vec_tuple_resp_value() {
+        let value: RespValue = vec![(
+            RespValue::SimpleString(Cow::Borrowed("key")),
+            RespValue::Integer(42),
+        )]
+        .into();
+        assert_eq!(
+            value,
+            RespValue::Map(Some(vec![(
+                RespValue::SimpleString(Cow::Borrowed("key")),
+                RespValue::Integer(42)
+            )]))
+        );
+    }
+
+    #[test]
+    fn test_into_string() {
+        let value: String = RespValue::SimpleString(Cow::Owned("test".to_string())).into();
+        assert_eq!(value, "test".to_string());
+    }
+
+    #[test]
+    fn test_into_i64() {
+        let value: i64 = RespValue::Integer(42).into();
+        assert_eq!(value, 42);
+    }
+
+    #[test]
+    fn test_into_option_string() {
+        let value: Option<String> =
+            RespValue::BulkString(Some(Cow::Owned("test".to_string()))).into();
+        assert_eq!(value, Some("test".to_string()));
+
+        let value: Option<String> = RespValue::BulkString(None).into();
+        assert_eq!(value, None);
+    }
+
+    #[test]
+    fn test_into_vec_resp_value() {
+        let value: Vec<RespValue> =
+            RespValue::Array(Some(vec![RespValue::Integer(1), RespValue::Integer(2)])).into();
+        assert_eq!(value, vec![RespValue::Integer(1), RespValue::Integer(2)]);
+    }
+
+    #[test]
+    fn test_into_bool() {
+        let value: bool = RespValue::Boolean(true).into();
+        assert_eq!(value, true);
+    }
+
+    #[test]
+    fn test_into_f64() {
+        let value: f64 = RespValue::Double(3.14).into();
+        assert_eq!(value, 3.14);
+    }
+
+    #[test]
+    fn test_into_vec_tuple_resp_value() {
+        let value: Vec<(RespValue, RespValue)> = RespValue::Map(Some(vec![(
+            RespValue::SimpleString(Cow::Borrowed("key")),
+            RespValue::Integer(42),
+        )]))
+        .into();
+        assert_eq!(
+            value,
+            vec![(
+                RespValue::SimpleString(Cow::Borrowed("key")),
+                RespValue::Integer(42)
+            )]
+        );
+    }
+
+    #[test]
+    fn test_partial_eq() {
+        assert_eq!(
+            RespValue::SimpleString(Cow::Borrowed("test")),
+            RespValue::SimpleString(Cow::Borrowed("test"))
+        );
+        assert_ne!(
+            RespValue::SimpleString(Cow::Borrowed("test")),
+            RespValue::SimpleString(Cow::Borrowed("different"))
+        );
+
+        assert_eq!(
+            RespValue::Error(Cow::Borrowed("error")),
+            RespValue::Error(Cow::Borrowed("error"))
+        );
+        assert_ne!(
+            RespValue::Error(Cow::Borrowed("error")),
+            RespValue::Error(Cow::Borrowed("different"))
+        );
+
+        assert_eq!(RespValue::Integer(42), RespValue::Integer(42));
+        assert_ne!(RespValue::Integer(42), RespValue::Integer(43));
+
+        assert_eq!(
+            RespValue::BulkString(Some(Cow::Borrowed("bulk"))),
+            RespValue::BulkString(Some(Cow::Borrowed("bulk")))
+        );
+        assert_ne!(
+            RespValue::BulkString(Some(Cow::Borrowed("bulk"))),
+            RespValue::BulkString(Some(Cow::Borrowed("different")))
+        );
+
+        assert_eq!(
+            RespValue::Array(Some(vec![RespValue::Integer(1)])),
+            RespValue::Array(Some(vec![RespValue::Integer(1)]))
+        );
+        assert_ne!(
+            RespValue::Array(Some(vec![RespValue::Integer(1)])),
+            RespValue::Array(Some(vec![RespValue::Integer(2)]))
+        );
+
+        assert_eq!(RespValue::Null, RespValue::Null);
+
+        assert_eq!(RespValue::Boolean(true), RespValue::Boolean(true));
+        assert_ne!(RespValue::Boolean(true), RespValue::Boolean(false));
+
+        assert_eq!(RespValue::Double(3.14), RespValue::Double(3.14));
+        assert_ne!(RespValue::Double(3.14), RespValue::Double(2.71));
+
+        assert_eq!(
+            RespValue::BigNumber(Cow::Borrowed("12345")),
+            RespValue::BigNumber(Cow::Borrowed("12345"))
+        );
+        assert_ne!(
+            RespValue::BigNumber(Cow::Borrowed("12345")),
+            RespValue::BigNumber(Cow::Borrowed("54321"))
+        );
+
+        assert_eq!(
+            RespValue::BulkError(Some(Cow::Borrowed("error"))),
+            RespValue::BulkError(Some(Cow::Borrowed("error")))
+        );
+        assert_ne!(
+            RespValue::BulkError(Some(Cow::Borrowed("error"))),
+            RespValue::BulkError(Some(Cow::Borrowed("different")))
+        );
+
+        assert_eq!(
+            RespValue::VerbatimString(Some(Cow::Borrowed("verbatim"))),
+            RespValue::VerbatimString(Some(Cow::Borrowed("verbatim")))
+        );
+        assert_ne!(
+            RespValue::VerbatimString(Some(Cow::Borrowed("verbatim"))),
+            RespValue::VerbatimString(Some(Cow::Borrowed("different")))
+        );
+
+        assert_eq!(
+            RespValue::Map(Some(vec![(
+                RespValue::SimpleString(Cow::Borrowed("key")),
+                RespValue::Integer(42)
+            )])),
+            RespValue::Map(Some(vec![(
+                RespValue::SimpleString(Cow::Borrowed("key")),
+                RespValue::Integer(42)
+            )]))
+        );
+        assert_ne!(
+            RespValue::Map(Some(vec![(
+                RespValue::SimpleString(Cow::Borrowed("key")),
+                RespValue::Integer(42)
+            )])),
+            RespValue::Map(Some(vec![(
+                RespValue::SimpleString(Cow::Borrowed("key")),
+                RespValue::Integer(43)
+            )]))
+        );
+
+        assert_eq!(
+            RespValue::Set(Some(vec![RespValue::Integer(1)])),
+            RespValue::Set(Some(vec![RespValue::Integer(1)]))
+        );
+        assert_ne!(
+            RespValue::Set(Some(vec![RespValue::Integer(1)])),
+            RespValue::Set(Some(vec![RespValue::Integer(2)]))
+        );
+
+        assert_eq!(
+            RespValue::Push(Some(vec![RespValue::Integer(1)])),
+            RespValue::Push(Some(vec![RespValue::Integer(1)]))
+        );
+        assert_ne!(
+            RespValue::Push(Some(vec![RespValue::Integer(1)])),
+            RespValue::Push(Some(vec![RespValue::Integer(2)]))
+        );
+    }
+
+    #[test]
+    fn test_default() {
+        let value: RespValue = Default::default();
+        assert_eq!(value, RespValue::Null);
+    }
+
+    #[test]
+    fn test_as_bytes() {
+        let value = RespValue::SimpleString(Cow::Borrowed("OK"));
+        assert_eq!(value.as_bytes(), b"+OK\r\n");
+
+        let value = RespValue::Error(Cow::Borrowed("Error message"));
+        assert_eq!(value.as_bytes(), b"-Error message\r\n");
+
+        let value = RespValue::Integer(42);
+        assert_eq!(value.as_bytes(), b":42\r\n");
+
+        let value = RespValue::BulkString(Some(Cow::Borrowed("bulk")));
+        assert_eq!(value.as_bytes(), b"$4\r\nbulk\r\n");
+
+        let value = RespValue::Null;
+        assert_eq!(value.as_bytes(), b"_\r\n");
+
+        let value = RespValue::Array(Some(vec![RespValue::Integer(1), RespValue::Integer(2)]));
+        assert_eq!(value.as_bytes(), b"*2\r\n:1\r\n:2\r\n");
+
+        let value = RespValue::Boolean(true);
+        assert_eq!(value.as_bytes(), b"#t\r\n");
+
+        let value = RespValue::Double(3.14);
+        assert_eq!(value.as_bytes(), b",3.14\r\n");
+
+        let value = RespValue::BigNumber(Cow::Borrowed("12345"));
+        assert_eq!(value.as_bytes(), b"(12345\r\n");
+
+        let value = RespValue::BulkError(Some(Cow::Borrowed("error")));
+        assert_eq!(value.as_bytes(), b"!error\r\n");
+
+        let value = RespValue::VerbatimString(Some(Cow::Borrowed("verbatim")));
+        assert_eq!(value.as_bytes(), b"=verbatim\r\n");
+
+        let value = RespValue::Map(Some(vec![(
+            RespValue::SimpleString(Cow::Borrowed("key")),
+            RespValue::Integer(42),
+        )]));
+        assert_eq!(value.as_bytes(), b"%1\r\n+key\r\n:42\r\n");
+
+        let value = RespValue::Set(Some(vec![RespValue::Integer(1), RespValue::Integer(2)]));
+        assert_eq!(value.as_bytes(), b"~2\r\n:1\r\n:2\r\n");
+
+        let value = RespValue::Push(Some(vec![RespValue::Integer(1), RespValue::Integer(2)]));
+        assert_eq!(value.as_bytes(), b">2\r\n:1\r\n:2\r\n");
+    }
+
+    #[test]
+    fn test_bulk_string_empty() {
+        let value = RespValue::BulkString(Some(Cow::Borrowed("")));
+        assert_eq!(value.as_bytes(), b"$0\r\n\r\n");
+    }
+
+    #[test]
+    fn test_bulk_string_none() {
+        let value = RespValue::BulkString(None);
+        assert_eq!(value.as_bytes(), b"$-1\r\n");
+    }
+
+    #[test]
+    fn test_bulk_error_empty() {
+        let value = RespValue::BulkError(Some(Cow::Borrowed("")));
+        assert_eq!(value.as_bytes(), b"!\r\n");
+    }
+
+    #[test]
+    fn test_bulk_error_none() {
+        let value = RespValue::BulkError(None);
+        assert_eq!(value.as_bytes(), b"!-1\r\n");
+    }
+
+    #[test]
+    fn test_verbatim_string_empty() {
+        let value = RespValue::VerbatimString(Some(Cow::Borrowed("")));
+        assert_eq!(value.as_bytes(), b"=\r\n");
+    }
+
+    #[test]
+    fn test_verbatim_string_none() {
+        let value = RespValue::VerbatimString(None);
+        assert_eq!(value.as_bytes(), b"=-1\r\n");
+    }
+
+    #[test]
+    fn test_map_empty() {
+        let value = RespValue::Map(Some(vec![]));
+        assert_eq!(value.as_bytes(), b"%0\r\n");
+    }
+
+    #[test]
+    fn test_map_none() {
+        let value = RespValue::Map(None);
+        assert_eq!(value.as_bytes(), b"%-1\r\n");
+    }
+
+    #[test]
+    fn test_set_empty() {
+        let value = RespValue::Set(Some(vec![]));
+        assert_eq!(value.as_bytes(), b"~0\r\n");
+    }
+
+    #[test]
+    fn test_set_none() {
+        let value = RespValue::Set(None);
+        assert_eq!(value.as_bytes(), b"~-1\r\n");
+    }
+
+    #[test]
+    fn test_push_empty() {
+        let value = RespValue::Push(Some(vec![]));
+        assert_eq!(value.as_bytes(), b">0\r\n");
+    }
+
+    #[test]
+    fn test_push_none() {
+        let value = RespValue::Push(None);
+        assert_eq!(value.as_bytes(), b">-1\r\n");
+    }
+
+    #[test]
+    fn test_is_none_bulk_string() {
+        let value = RespValue::BulkString(Some(Cow::Borrowed("")));
+        assert!(value.is_none());
+
+        let value = RespValue::BulkString(None);
+        assert!(value.is_none());
+    }
+
+    #[test]
+    fn test_is_none_array() {
+        let value = RespValue::Array(Some(vec![]));
+        assert!(value.is_none());
+
+        let value = RespValue::Array(None);
+        assert!(value.is_none());
+    }
+
+    #[test]
+    fn test_is_none_map() {
+        let value = RespValue::Map(Some(vec![]));
+        assert!(value.is_none());
+
+        let value = RespValue::Map(None);
+        assert!(value.is_none());
+    }
+
+    #[test]
+    fn test_is_none_set() {
+        let value = RespValue::Set(Some(vec![]));
+        assert!(value.is_none());
+
+        let value = RespValue::Set(None);
+        assert!(value.is_none());
+    }
+
+    #[test]
+    fn test_is_none_push() {
+        let value = RespValue::Push(Some(vec![]));
+        assert!(value.is_none());
+
+        let value = RespValue::Push(None);
+        assert!(value.is_none());
+    }
+
+    #[test]
+    fn test_is_none_verbatim_string() {
+        let value = RespValue::VerbatimString(Some(Cow::Borrowed("")));
+        assert!(value.is_none());
+
+        let value = RespValue::VerbatimString(None);
+        assert!(value.is_none());
+    }
+
+    #[test]
+    fn test_from_big_number() {
+        let value: RespValue = RespValue::BigNumber(Cow::Borrowed("12345"));
+        assert_eq!(value.as_bytes(), b"(12345\r\n");
+    }
+
+    #[test]
+    fn test_from_bulk_error() {
+        let value: RespValue = RespValue::BulkError(Some(Cow::Borrowed("error")));
+        assert_eq!(value.as_bytes(), b"!error\r\n");
+
+        let value: RespValue = RespValue::BulkError(None);
+        assert_eq!(value.as_bytes(), b"!-1\r\n");
+    }
+
+    #[test]
+    fn test_from_verbatim_string() {
+        let value: RespValue = RespValue::VerbatimString(Some(Cow::Borrowed("verbatim")));
+        assert_eq!(value.as_bytes(), b"=verbatim\r\n");
+
+        let value: RespValue = RespValue::VerbatimString(None);
+        assert_eq!(value.as_bytes(), b"=-1\r\n");
+    }
+
+    #[test]
+    fn test_from_map() {
+        let value: RespValue = RespValue::Map(Some(vec![
+            (
+                RespValue::SimpleString(Cow::Borrowed("key1")),
+                RespValue::Integer(123),
+            ),
+            (
+                RespValue::SimpleString(Cow::Borrowed("key2")),
+                RespValue::BulkString(Some(Cow::Borrowed("value"))),
+            ),
+        ]));
+        assert_eq!(
+            value.as_bytes(),
+            b"%2\r\n+key1\r\n:123\r\n+key2\r\n$5\r\nvalue\r\n"
+        );
+
+        let value: RespValue = RespValue::Map(None);
+        assert_eq!(value.as_bytes(), b"%-1\r\n");
+    }
+
+    #[test]
+    fn test_from_set() {
+        let value: RespValue = RespValue::Set(Some(vec![
+            RespValue::Integer(1),
+            RespValue::SimpleString(Cow::Borrowed("two")),
+            RespValue::BulkString(Some(Cow::Borrowed("three"))),
+        ]));
+        assert_eq!(value.as_bytes(), b"~3\r\n:1\r\n+two\r\n$5\r\nthree\r\n");
+
+        let value: RespValue = RespValue::Set(None);
+        assert_eq!(value.as_bytes(), b"~-1\r\n");
+    }
+
+    #[test]
+    fn test_from_push() {
+        let value: RespValue = RespValue::Push(Some(vec![
+            RespValue::SimpleString(Cow::Borrowed("message")),
+            RespValue::Integer(42),
+        ]));
+        assert_eq!(value.as_bytes(), b">2\r\n+message\r\n:42\r\n");
+
+        let value: RespValue = RespValue::Push(None);
+        assert_eq!(value.as_bytes(), b">-1\r\n");
+    }
 }

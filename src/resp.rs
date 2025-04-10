@@ -103,7 +103,6 @@ impl<'a> From<Vec<(RespValue<'a>, RespValue<'a>)>> for RespValue<'a> {
     }
 }
 
-// Implement Into traits for RespValue
 impl Into<String> for RespValue<'_> {
     fn into(self) -> String {
         match self {
