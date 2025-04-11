@@ -1,5 +1,5 @@
 use crate::resp::RespValue;
-use bytes::{Buf, BytesMut}; // Add Buf trait
+use bytes::BytesMut; // Add Buf trait
 use memchr::memchr;
 use std::borrow::Cow;
 use tracing::debug;

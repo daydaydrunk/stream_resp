@@ -1,8 +1,5 @@
-use bytes::BytesMut;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use std::borrow::Cow;
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use stream_resp::parser::Parser;
-use stream_resp::resp::RespValue;
 
 fn benchmark_parser(c: &mut Criterion) {
     let mut group = c.benchmark_group("RESP Parser");
