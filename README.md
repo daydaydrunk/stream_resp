@@ -2,6 +2,8 @@
 
 StreamRESP is a RESP (Redis Serialization Protocol) parser implemented using a finite state machine (FSM) approach. Designed for streaming scenarios.
 
+Documentation: [DeepWiki](https://deepwiki.com/daydaydrunk/stream_resp)
+
 ## Installation
 
 To use `stream_resp` in your project, add the following to your `Cargo.toml`:
