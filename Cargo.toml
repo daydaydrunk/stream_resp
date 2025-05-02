@@ -1,6 +1,6 @@
 [package]
 name = "stream_resp"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2024"
 authors = ["HanLin Chai <take3812@gmail.com>"]
 description = "StreamRESP is a RESP (Redis Serialization Protocol) parser implemented using a finite state machine (FSM) approach. Designed for streaming scenarios."
@@ -9,6 +9,7 @@ repository = "https://github.com/daydaydrunk/stream_resp"
 documentation = "https://docs.rs/stream_resp/latest/stream_resp/"
 keywords = ["redis", "resp", "parser", "streaming", "fsm"]
 categories = ["parsing", "network-programming", "database-implementations"]
+homepage = "https://deepwiki.com/daydaydrunk/stream_resp"
 
 [dependencies]
 bytes = "1"
