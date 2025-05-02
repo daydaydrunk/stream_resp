@@ -1,9 +1,9 @@
 [package]
 name = "stream_resp"
-version = "1.2.0"
+version = "1.2.1"
 edition = "2024"
 authors = ["HanLin Chai <take3812@gmail.com>"]
-description = "StreamRESP is a RESP (Redis Serialization Protocol) parser implemented using a finite state machine (FSM) approach. Designed for streaming scenarios."
+description = "A fully compliant RESP3 streaming parser"
 license = "MIT"
 repository = "https://github.com/daydaydrunk/stream_resp"
 documentation = "https://docs.rs/stream_resp/latest/stream_resp/"
