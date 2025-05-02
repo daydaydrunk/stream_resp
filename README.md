@@ -2,7 +2,7 @@
 
 StreamRESP is a RESP (Redis Serialization Protocol) parser **fully compliant with RESP3**, implemented using a finite state machine (FSM) approach. Designed for streaming scenarios.
 
-- **Full RESP3 support:** All RESP3 types and edge cases are supported.
+- **Full RESP3 support:** All RESP3 types are supported.
 - **Optional explicit positive integer sign:** Enable the `explicit-positive-sign` feature to support parsing integers with an explicit `+` sign (e.g., `:+123\r\n`).
 
 Documentation: [DeepWiki](https://deepwiki.com/daydaydrunk/stream_resp)
