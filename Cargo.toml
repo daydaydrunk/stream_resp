@@ -7,7 +7,7 @@ description = "StreamRESP is a RESP (Redis Serialization Protocol) parser implem
 license = "MIT"
 repository = "https://github.com/daydaydrunk/stream_resp"
 documentation = "https://docs.rs/stream_resp/latest/stream_resp/"
-keywords = ["redis", "resp", "resp3", "parser", "streaming", "fsm"]
+keywords = ["redis", "resp", "resp3", "parser", "streaming"]
 categories = ["parsing", "network-programming", "database-implementations"]
 homepage = "https://deepwiki.com/daydaydrunk/stream_resp"
 
