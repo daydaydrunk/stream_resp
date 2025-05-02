@@ -1,3 +1,5 @@
+#![warn(unused_assignments)]
+
 #[cfg(feature = "jemalloc")]
 use jemallocator::Jemalloc;
 

@@ -1,6 +1,9 @@
 # stream_resp
 
-StreamRESP is a RESP (Redis Serialization Protocol) parser implemented using a finite state machine (FSM) approach. Designed for streaming scenarios.
+StreamRESP is a RESP (Redis Serialization Protocol) parser **fully compliant with RESP3**, implemented using a finite state machine (FSM) approach. Designed for streaming scenarios.
+
+- **Full RESP3 support:** All RESP3 types and edge cases are supported.
+- **Optional explicit positive integer sign:** Enable the `explicit-positive-sign` feature to support parsing integers with an explicit `+` sign (e.g., `:+123\r\n`).
 
 Documentation: [DeepWiki](https://deepwiki.com/daydaydrunk/stream_resp)
 
@@ -12,11 +15,26 @@ To use `stream_resp` in your project, add the following to your `Cargo.toml`:
 [dependencies]
 stream_resp = "1"
 ```
-Enabling jemalloc
-If you want to enable jemalloc for better memory allocation performance, you can enable the jemalloc feature in your Cargo.toml:
+
+## Features
+
+### Enabling jemalloc
+If you want to enable jemalloc for better memory allocation performance, you can enable the `jemalloc` feature in your `Cargo.toml`:
 ```toml
 [dependencies]
 stream_resp = { version = "1", features = ["jemalloc"] }
+```
+
+### Enabling Explicit Positive Integer Sign (`+`)
+By default, the parser strictly adheres to the RESP specification for integers (`:<number>\r\n`). However, some clients or protocols might use an explicit plus sign (`:+<number>\r\n`). To enable parsing of integers with an explicit `+`, enable the `integer-plus-sign` feature:
+```toml
+[dependencies]
+stream_resp = { version = "1", features = ["explicit-positive-sign"] }
+```
+You can also enable multiple features:
+```toml
+[dependencies]
+stream_resp = { version = "1", features = ["jemalloc", "explicit-positive-sign"] }
 ```
 
 ## Usage

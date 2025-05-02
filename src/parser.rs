@@ -2,6 +2,7 @@ use crate::resp::RespValue;
 use bytes::BytesMut; // Add Buf trait
 use memchr::memchr;
 use std::borrow::Cow;
+use std::fmt; // Import fmt
 use tracing::debug;
 
 const MAX_ITERATIONS: usize = 1024;
@@ -19,6 +20,20 @@ pub enum ParseError {
     NotEnoughData,
     InvalidDepth,
     InvalidUtf8,
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ParseError::InvalidFormat(msg) => write!(f, "Invalid format: {}", msg),
+            ParseError::InvalidLength => write!(f, "Invalid length"),
+            ParseError::UnexpectedEof => write!(f, "Unexpected end of input"),
+            ParseError::Overflow => write!(f, "Numeric overflow"),
+            ParseError::NotEnoughData => write!(f, "Not enough data in buffer"),
+            ParseError::InvalidDepth => write!(f, "Maximum nesting depth exceeded"),
+            ParseError::InvalidUtf8 => write!(f, "Invalid UTF-8 sequence"),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -52,6 +67,7 @@ pub enum ParseState {
         total: usize,
         current: usize,
         elements: Vec<RespValue<'static>>,
+        original_type_char: u8, // Added to distinguish between Array (*) and Map (%)
     },
     // Outcomes
     Error(ParseError),
@@ -112,7 +128,7 @@ pub struct Parser {
 /// - `handle_bulk_string(&mut self, start_pos: usize, remaining: usize) -> ParseState`
 ///   Handles the parsing of bulk strings.
 ///
-/// - `handle_array(&mut self, pos: usize, total: usize, current: usize, elements: Vec<RespValue<'static>>) -> ParseState`
+/// - `handle_array(&mut self, pos: usize, total: usize, current: usize, elements: Vec<RespValue<'static>>, original_type_char: u8) -> ParseState`
 ///   Handles the parsing of arrays.
 ///
 /// - `handle_simple_string(&mut self, pos: usize) -> ParseState`
@@ -214,6 +230,158 @@ impl Parser {
                 pos: index + 1,
                 type_char: b'*',
             },
+            b'%' => ParseState::ReadingLength {
+                // Added Map type marker
+                value: 0,
+                negative: false,
+                pos: index + 1,
+                type_char: b'%',
+            },
+            b'~' => ParseState::ReadingLength {
+                // Added Set type marker
+                value: 0,
+                negative: false,
+                pos: index + 1,
+                type_char: b'~',
+            },
+            b'>' => ParseState::ReadingLength {
+                // Added Push type marker
+                value: 0,
+                negative: false,
+                pos: index + 1,
+                type_char: b'>',
+            },
+            b'_' => {
+                // Handle Null type
+                if index + 2 < self.buffer.len()
+                    && self.buffer[index + 1] == b'\r'
+                    && self.buffer[index + 2] == b'\n'
+                {
+                    ParseState::Complete(Some((RespValue::Null, index + 3)))
+                } else {
+                    ParseState::Error(ParseError::UnexpectedEof)
+                }
+            }
+            b'#' => {
+                // Handle Boolean type
+                if index + 2 < self.buffer.len()
+                    && self.buffer[index + 2] == b'\r'
+                    && index + 3 < self.buffer.len()
+                    && self.buffer[index + 3] == b'\n'
+                {
+                    match self.buffer[index + 1] {
+                        b't' => ParseState::Complete(Some((RespValue::Boolean(true), index + 4))),
+                        b'f' => ParseState::Complete(Some((RespValue::Boolean(false), index + 4))),
+                        _ => ParseState::Error(ParseError::InvalidFormat(
+                            "Invalid boolean value".into(),
+                        )),
+                    }
+                } else {
+                    ParseState::Error(ParseError::UnexpectedEof)
+                }
+            }
+            b',' => {
+                // Handle Double type
+                match self.find_crlf(index + 1) {
+                    Some(end_pos) => {
+                        let bytes = &self.buffer[(index + 1)..end_pos];
+                        let double_str = std::str::from_utf8(bytes);
+
+                        match double_str {
+                            Ok(s) => match s.parse::<f64>() {
+                                Ok(value) => ParseState::Complete(Some((
+                                    RespValue::Double(value),
+                                    end_pos + CRLF_LEN,
+                                ))),
+                                Err(_) => ParseState::Error(ParseError::InvalidFormat(
+                                    "Invalid double value".into(),
+                                )),
+                            },
+                            Err(_) => ParseState::Error(ParseError::InvalidUtf8),
+                        }
+                    }
+                    None => ParseState::Error(ParseError::UnexpectedEof),
+                }
+            }
+            b'(' => {
+                // Handle Big Number type
+                match self.find_crlf(index + 1) {
+                    Some(end_pos) => {
+                        let bytes = &self.buffer[(index + 1)..end_pos];
+
+                        // Verify that the big number contains only valid characters (digits and optional leading minus)
+                        let is_valid = bytes
+                            .iter()
+                            .enumerate()
+                            .all(|(i, &b)| (b'0'..=b'9').contains(&b) || (i == 0 && b == b'-'));
+
+                        if !is_valid {
+                            return ParseState::Error(ParseError::InvalidFormat(
+                                "Invalid big number format".into(),
+                            ));
+                        }
+
+                        match std::str::from_utf8(bytes) {
+                            Ok(s) => ParseState::Complete(Some((
+                                RespValue::BigNumber(Cow::Owned(s.to_string())),
+                                end_pos + CRLF_LEN,
+                            ))),
+                            Err(_) => ParseState::Error(ParseError::InvalidUtf8),
+                        }
+                    }
+                    None => ParseState::Error(ParseError::UnexpectedEof),
+                }
+            }
+            b'!' => {
+                // Handle Bulk Error type
+                match self.find_crlf(index + 1) {
+                    Some(end_pos) => {
+                        let bytes = &self.buffer[(index + 1)..end_pos];
+
+                        // Check for null bulk error (-1)
+                        if bytes.len() == 2 && bytes[0] == b'-' && bytes[1] == b'1' {
+                            return ParseState::Complete(Some((
+                                RespValue::BulkError(None),
+                                end_pos + CRLF_LEN,
+                            )));
+                        }
+
+                        match std::str::from_utf8(bytes) {
+                            Ok(s) => ParseState::Complete(Some((
+                                RespValue::BulkError(Some(Cow::Owned(s.to_string()))),
+                                end_pos + CRLF_LEN,
+                            ))),
+                            Err(_) => ParseState::Error(ParseError::InvalidUtf8),
+                        }
+                    }
+                    None => ParseState::Error(ParseError::UnexpectedEof),
+                }
+            }
+            b'=' => {
+                // Handle Verbatim String type
+                match self.find_crlf(index + 1) {
+                    Some(end_pos) => {
+                        let bytes = &self.buffer[(index + 1)..end_pos];
+
+                        // Check for null verbatim string (-1)
+                        if bytes.len() == 2 && bytes[0] == b'-' && bytes[1] == b'1' {
+                            return ParseState::Complete(Some((
+                                RespValue::VerbatimString(None),
+                                end_pos + CRLF_LEN,
+                            )));
+                        }
+
+                        match std::str::from_utf8(bytes) {
+                            Ok(s) => ParseState::Complete(Some((
+                                RespValue::VerbatimString(Some(Cow::Owned(s.to_string()))),
+                                end_pos + CRLF_LEN,
+                            ))),
+                            Err(_) => ParseState::Error(ParseError::InvalidUtf8),
+                        }
+                    }
+                    None => ParseState::Error(ParseError::UnexpectedEof),
+                }
+            }
             b'\r' => {
                 // Handle CRLF for array elements
                 if index + 1 < self.buffer.len() && self.buffer[index + 1] == b'\n' {
@@ -264,34 +432,82 @@ impl Parser {
                     type_char,
                 },
                 b'\r' => match self.buffer.get(pos + 1) {
-                    Some(&b'\n') => match type_char {
-                        b'$' => {
-                            if value <= 0 {
-                                ParseState::Complete(Some((RespValue::Null, pos)))
-                            } else {
-                                ParseState::ReadingBulkString {
-                                    start_pos: pos + 2,
-                                    remaining: value as usize,
+                    Some(&b'\n') => {
+                        let next_pos = pos + CRLF_LEN; // Position after CRLF
+                        match type_char {
+                            b'$' => {
+                                if value < 0 {
+                                    // RESP3 Null Bulk String $-1\r\n
+                                    ParseState::Complete(Some((
+                                        RespValue::BulkString(None),
+                                        next_pos,
+                                    )))
+                                } else if value == 0 {
+                                    // RESP3 Empty Bulk String $0\r\n\r\n
+                                    // Need to check for the second CRLF
+                                    if self.buffer.len() >= next_pos + CRLF_LEN
+                                        && self.buffer[next_pos..next_pos + CRLF_LEN] == *b"\r\n"
+                                    {
+                                        ParseState::Complete(Some((
+                                            RespValue::BulkString(Some(Cow::Borrowed(""))),
+                                            next_pos + CRLF_LEN,
+                                        )))
+                                    } else {
+                                        ParseState::Error(ParseError::UnexpectedEof) // Or NotEnoughData
+                                    }
+                                } else {
+                                    ParseState::ReadingBulkString {
+                                        start_pos: next_pos,
+                                        remaining: value as usize,
+                                    }
                                 }
                             }
-                        }
-                        b'*' => {
-                            if value <= 0 {
-                                ParseState::Complete(Some((RespValue::Array(None), pos)))
-                            } else {
-                                ParseState::ReadingArray {
-                                    pos: pos + 2,
-                                    total: value as usize,
-                                    elements: Vec::with_capacity(value as usize),
-                                    current: 1,
+                            b'*' | b'%' | b'~' | b'>' => {
+                                // Handle Array, Map, Set, Push length
+                                if value < 0 {
+                                    // RESP3 Null Aggregate Type
+                                    let null_value = match type_char {
+                                        b'*' => RespValue::Array(None),
+                                        b'%' => RespValue::Map(None),
+                                        b'~' => RespValue::Set(None),
+                                        b'>' => RespValue::Push(None),
+                                        _ => unreachable!(), // Should be covered by outer match
+                                    };
+                                    ParseState::Complete(Some((null_value, next_pos)))
+                                } else if value == 0 {
+                                    // RESP3 Empty Aggregate Type
+                                    let empty_value = match type_char {
+                                        b'*' => RespValue::Array(Some(vec![])),
+                                        b'%' => RespValue::Map(Some(vec![])),
+                                        b'~' => RespValue::Set(Some(vec![])),
+                                        b'>' => RespValue::Push(Some(vec![])),
+                                        _ => unreachable!(),
+                                    };
+                                    ParseState::Complete(Some((empty_value, next_pos)))
+                                } else {
+                                    let total_elements = if type_char == b'%' {
+                                        (value * 2) as usize // Maps have key-value pairs
+                                    } else {
+                                        value as usize
+                                    };
+                                    ParseState::ReadingArray {
+                                        // Use ReadingArray for all aggregate types
+                                        pos: next_pos,
+                                        total: total_elements,
+                                        elements: Vec::with_capacity(total_elements),
+                                        current: 0, // Start counting from 0 elements read
+                                        original_type_char: type_char, // Store the original type
+                                    }
                                 }
                             }
+                            b':' => {
+                                ParseState::Complete(Some((RespValue::Integer(value), next_pos)))
+                            }
+                            _ => ParseState::Error(ParseError::InvalidFormat(
+                                "Invalid length type".into(),
+                            )),
                         }
-                        b':' => ParseState::Complete(Some((RespValue::Integer(value), pos))),
-                        _ => ParseState::Error(ParseError::InvalidFormat(
-                            "Invalid length type".into(),
-                        )),
-                    },
+                    }
                     _ => ParseState::Error(ParseError::InvalidFormat(
                         "Expected \\n after \\r".into(),
                     )),
@@ -300,7 +516,7 @@ impl Parser {
                     "Invalid character in length".into(),
                 )),
             },
-            None => ParseState::Error(ParseError::UnexpectedEof),
+            None => ParseState::Error(ParseError::UnexpectedEof), // Changed from NotEnoughData
         };
     }
 
@@ -308,7 +524,12 @@ impl Parser {
     fn handle_bulk_string(&mut self, start_pos: usize, remaining: usize) -> ParseState {
         // Early returns for special cases
         if remaining == 0 {
-            return ParseState::Complete(Some((RespValue::BulkString(None), start_pos + CRLF_LEN)));
+            // This case should ideally not be reached if handle_length handles $0 correctly.
+            // If it is reached, it implies an empty string content followed by CRLF.
+            // Let's treat it as an error or unexpected state for now.
+            return ParseState::Error(ParseError::InvalidFormat(
+                "Unexpected zero remaining in handle_bulk_string".into(),
+            ));
         }
 
         if remaining >= self.max_length {
@@ -356,25 +577,27 @@ impl Parser {
         total: usize,
         current: usize,
         elements: Vec<RespValue<'static>>,
+        original_type_char: u8, // Pass original_type_char
     ) -> ParseState {
-        if total == 0 {
-            return ParseState::Complete(Some((RespValue::Array(None), pos)));
+        if current >= total {
+            // Check if all elements are read
+            // Completion logic moved to try_parse
+            // This state should only transition to Index or Error here
+            // If we reach here, it means we are ready to parse the next element
+            ParseState::Index { pos }
+        } else {
+            // Store current array/map state
+            self.nested_stack.push(ParseState::ReadingArray {
+                pos, // Position *after* the element we just parsed
+                total,
+                current, // Number of elements *already* parsed
+                elements,
+                original_type_char,
+            });
+
+            // Start parsing next element from current position
+            ParseState::Index { pos }
         }
-
-        if current > total {
-            return ParseState::Complete(Some((RespValue::Array(Some(elements)), pos)));
-        }
-
-        // Store current array state
-        self.nested_stack.push(ParseState::ReadingArray {
-            pos,
-            total,
-            current,
-            elements,
-        });
-
-        // Start parsing next element from current position
-        ParseState::Index { pos }
     }
 
     #[inline(always)]
@@ -382,6 +605,13 @@ impl Parser {
         match self.find_crlf(pos) {
             Some(end_pos) => {
                 let bytes = &self.buffer[pos..end_pos];
+
+                // Validate no CR/LF in simple strings per RESP3 spec
+                if bytes.iter().any(|&b| b == b'\r' || b == b'\n') {
+                    return ParseState::Error(ParseError::InvalidFormat(
+                        "Simple string cannot contain CR or LF".into(),
+                    ));
+                }
 
                 // Use from_utf8_lossy to directly create Cow<str>
                 let string = String::from_utf8_lossy(bytes).into_owned();
@@ -419,39 +649,123 @@ impl Parser {
             Some(end_pos) => {
                 let bytes = &self.buffer[pos..end_pos];
 
-                // 小整数快速路径
-                if bytes.len() <= 10 {
+                // Check for explicit plus sign
+                let explicit_plus = bytes.first() == Some(&b'+');
+
+                if explicit_plus {
+                    #[cfg(feature = "explicit-positive-sign")]
+                    {
+                        // If feature enabled, skip the '+' and parse the rest
+                        bytes = &bytes[1..];
+                        if bytes.is_empty() {
+                            // Handle case like ":+\r\n"
+                            return ParseState::Error(ParseError::InvalidFormat(
+                                "Invalid integer format after '+'".into(),
+                            ));
+                        }
+                    }
+                    #[cfg(not(feature = "explicit-positive-sign"))]
+                    {
+                        // If feature disabled, '+' is invalid
+                        return ParseState::Error(ParseError::InvalidFormat(
+                            "Explicit '+' sign in integer not supported (use 'explicit-positive-sign' feature)".into(),
+                        ));
+                    }
+                }
+
+                // 小整数快速路径 (Small integer fast path)
+                // Use the potentially modified 'bytes' slice
+                if bytes.len() <= 19 {
+                    // Adjusted length check slightly for safety with i64
                     let mut value: i64 = 0;
                     let mut start = 0;
                     let negative = bytes.first() == Some(&b'-');
 
                     if negative {
+                        // Cannot have both explicit '+' and '-'
+                        if explicit_plus {
+                            return ParseState::Error(ParseError::InvalidFormat(
+                                "Cannot have both '+' and '-' signs in integer".into(),
+                            ));
+                        }
                         start = 1;
                     }
 
+                    if start >= bytes.len() && (negative || explicit_plus) {
+                        // Handle cases like ":-\r\n" or ":+\r\n" (if feature enabled)
+                        return ParseState::Error(ParseError::InvalidFormat(
+                            "Invalid integer format after sign".into(),
+                        ));
+                    }
+
                     for &byte in &bytes[start..] {
-                        if byte < b'0' || byte > b'9' {
+                        if !(b'0'..=b'9').contains(&byte) {
+                            // Simplified check
                             return ParseState::Error(ParseError::InvalidFormat(
-                                "Invalid integer".into(),
+                                "Invalid character in integer".into(),
                             ));
                         }
-                        if value > i64::MAX / 10 {
+                        // Check for potential overflow before multiplication
+                        if value > (i64::MAX - (byte - b'0') as i64) / 10 {
                             return ParseState::Error(ParseError::Overflow);
                         }
                         value = value * 10 + (byte - b'0') as i64;
                     }
 
+                    // Apply sign if negative
+                    if negative {
+                        // Check for potential overflow for i64::MIN
+                        if value == i64::MAX.wrapping_add(1) {
+                            // Check if value represents abs(i64::MIN)
+                            value = i64::MIN; // Assign directly to avoid negation overflow
+                        } else {
+                            value = -value;
+                        }
+                    }
+
                     return ParseState::Complete(Some((
-                        RespValue::Integer(if negative { -value } else { value }),
+                        RespValue::Integer(value),
                         end_pos + CRLF_LEN,
                     )));
                 }
 
+                // Fallback to atoi for potentially larger strings (or if fast path logic needs refinement)
+                // Note: atoi might handle '+' differently or not at all depending on its implementation.
+                // If using atoi, ensure its behavior aligns with the feature flag expectation.
+                // The fast path above is generally preferred for RESP integers.
                 match atoi::atoi::<i64>(bytes) {
                     Some(value) => {
-                        ParseState::Complete(Some((RespValue::Integer(value), end_pos + CRLF_LEN)))
+                        // If explicit_plus was handled and atoi doesn't support '+', this might be redundant
+                        // or needs adjustment based on atoi behavior.
+                        // Assuming atoi handles '-' correctly but maybe not '+'.
+                        #[cfg(feature = "explicit-positive-sign")]
+                        {
+                            // If atoi parsed successfully, it should be the correct value
+                            ParseState::Complete(Some((
+                                RespValue::Integer(value),
+                                end_pos + CRLF_LEN,
+                            )))
+                        }
+                        #[cfg(not(feature = "explicit-positive-sign"))]
+                        {
+                            // If '+' was present, we should have errored earlier.
+                            // If '-' or no sign, atoi result is fine.
+                            if explicit_plus {
+                                // This path shouldn't be reached if '+' is invalid
+                                ParseState::Error(ParseError::InvalidFormat(
+                                    "Internal error: explicit '+' parsed unexpectedly".into(),
+                                ))
+                            } else {
+                                ParseState::Complete(Some((
+                                    RespValue::Integer(value),
+                                    end_pos + CRLF_LEN,
+                                )))
+                            }
+                        }
                     }
-                    None => ParseState::Error(ParseError::InvalidFormat("Invalid integer".into())),
+                    None => ParseState::Error(ParseError::InvalidFormat(
+                        "Invalid integer format (atoi failed)".into(),
+                    )),
                 }
             }
             None => ParseState::Error(ParseError::UnexpectedEof),
@@ -508,7 +822,8 @@ impl Parser {
                     total,
                     current,
                     elements,
-                } => self.handle_array(pos, total, current, elements),
+                    original_type_char, // Pass to handler
+                } => self.handle_array(pos, total, current, elements, original_type_char),
                 ParseState::ReadingLength {
                     pos,
                     value,
@@ -527,54 +842,115 @@ impl Parser {
             };
 
             match next_state {
-                ParseState::Complete(Some((value, pos))) => match self.nested_stack.last_mut() {
-                    Some(ParseState::ReadingArray {
+                ParseState::Complete(Some((value, pos))) => {
+                    // Check if we are inside a nested structure (Array or Map)
+                    if let Some(ParseState::ReadingArray {
                         total,
                         elements,
                         current,
                         ..
-                    }) => {
+                    }) = self.nested_stack.last_mut()
+                    {
                         elements.push(value);
+                        *current += 1;
 
                         if *current < *total {
-                            *current += 1;
+                            // More elements needed for this array/map, continue parsing from `pos`
                             self.state = ParseState::Index { pos };
                             continue;
                         } else {
-                            let mut elements_vec = Vec::new();
-                            if let ParseState::ReadingArray {
-                                elements: arr_elements,
+                            // Array/Map/Set/Push is complete, pop it from the stack
+                            let mut completed_elements = Vec::new();
+                            let finished_type_char: u8;
+
+                            // Pop the completed ReadingArray state
+                            if let Some(ParseState::ReadingArray {
+                                elements: final_elements,
+                                original_type_char: type_char,
                                 ..
-                            } = self.nested_stack.last_mut().unwrap()
+                            }) = self.nested_stack.pop()
                             {
-                                std::mem::swap(arr_elements, &mut elements_vec);
+                                completed_elements = final_elements;
+                                finished_type_char = type_char;
+                            } else {
+                                // Should not happen if logic is correct
+                                return Err(ParseError::InvalidFormat(
+                                    "Mismatched nested stack state".into(),
+                                ));
                             }
 
-                            let completed_result = RespValue::Array(Some(elements_vec));
-                            if !self.nested_stack.is_empty() {
-                                self.nested_stack.pop();
-                                self.state = ParseState::Complete(Some((completed_result, pos)));
-                                continue;
-                            } else {
-                                self.clear_buffer(pos);
-                                if completed_result.is_none() {
-                                    self.state = ParseState::Complete(None);
-                                } else {
-                                    return Ok(Some(completed_result));
+                            // Construct the final value (Array, Map, Set, or Push)
+                            let completed_result = match finished_type_char {
+                                b'%' => {
+                                    // Map
+                                    let mut map_pairs =
+                                        Vec::with_capacity(completed_elements.len() / 2);
+                                    let mut iter = completed_elements.into_iter();
+                                    while let (Some(key), Some(val)) = (iter.next(), iter.next()) {
+                                        map_pairs.push((key, val));
+                                    }
+                                    RespValue::Map(Some(map_pairs))
                                 }
+                                b'~' => {
+                                    // Set
+                                    RespValue::Set(Some(completed_elements))
+                                }
+                                b'>' => {
+                                    // Push
+                                    RespValue::Push(Some(completed_elements))
+                                }
+                                _ => {
+                                    // Default to Array (*)
+                                    RespValue::Array(Some(completed_elements))
+                                }
+                            };
+
+                            // If the stack is now empty, this is the final result
+                            if self.nested_stack.is_empty() {
+                                self.clear_buffer(pos);
+                                return Ok(Some(completed_result));
+                            } else {
+                                // Otherwise, this completed structure is an element of the parent structure
+                                // Push it back onto the parent's state (which is now on top of the stack)
+                                // The loop will continue and handle pushing this `completed_result`
+                                self.state = ParseState::Complete(Some((completed_result, pos)));
+                                continue; // Re-evaluate with the completed value in the next iteration
                             }
                         }
-                    }
-                    _ => {
+                    } else {
+                        // Not in a nested structure, this is the final result
                         if self.nested_stack.is_empty() {
                             self.clear_buffer(pos);
                             return Ok(Some(value));
+                        } else {
+                            // This case might indicate an issue, e.g., completing a value when stack isn't empty but top isn't ReadingArray
+                            return Err(ParseError::InvalidFormat(
+                                "Unexpected completion state".into(),
+                            ));
                         }
                     }
-                },
+                }
+                ParseState::Complete(None) => {
+                    // Handle cases like Null Array/Map completion if needed
+                    // This might occur if a Null Array/Map is parsed directly
+                    if self.nested_stack.is_empty() {
+                        // Assuming pos is correctly set by the state that produced Complete(None)
+                        // Need to ensure states like handle_length correctly set pos for null/empty types
+                        // Let's assume the pos is advanced correctly by the caller state
+                        self.state = ParseState::Index { pos: 0 }; // Reset or use appropriate pos
+                        return Ok(None); // Indicate no complete value parsed (e.g. null array)
+                    } else {
+                        // Handle null/empty completion within a nested structure if necessary
+                        // This part might need refinement based on how Complete(None) is generated
+                        return Err(ParseError::InvalidFormat(
+                            "Unexpected None completion in nested structure".into(),
+                        ));
+                    }
+                }
                 ParseState::Error(error) => {
                     return Err(error);
                 }
+                // Any other state just becomes the current state for the next iteration
                 _ => self.state = next_state,
             }
         }
