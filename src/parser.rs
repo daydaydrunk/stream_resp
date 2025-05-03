@@ -673,7 +673,7 @@ impl Parser {
                     }
                 }
 
-                // 小整数快速路径 (Small integer fast path)
+                // Small integer fast path
                 // Use the potentially modified 'bytes' slice
                 if bytes.len() <= 19 {
                     // Adjusted length check slightly for safety with i64

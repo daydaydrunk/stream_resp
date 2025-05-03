@@ -1,4 +1,6 @@
 use std::borrow::Cow;
+use std::convert::TryFrom; // Add TryFrom import
+use std::fmt; // Add fmt import for error display
 
 #[derive(Debug, Clone)]
 #[repr(C, align(8))]

@@ -24,11 +24,13 @@ mod tests {
 
         assert!(RespValue::Map(None).is_none());
         assert!(RespValue::Map(Some(vec![])).is_none());
-        assert!(!RespValue::Map(Some(vec![(
-            RespValue::SimpleString(Cow::Borrowed("key")),
-            RespValue::SimpleString(Cow::Borrowed("value"))
-        )]))
-        .is_none());
+        assert!(
+            !RespValue::Map(Some(vec![(
+                RespValue::SimpleString(Cow::Borrowed("key")),
+                RespValue::SimpleString(Cow::Borrowed("value"))
+            )]))
+            .is_none()
+        );
 
         assert!(RespValue::Set(None).is_none());
         assert!(RespValue::Set(Some(vec![])).is_none());
@@ -46,11 +48,13 @@ mod tests {
         assert!(!RespValue::Push(Some(vec![RespValue::Integer(1)])).is_none());
 
         assert!(RespValue::Map(None).is_none());
-        assert!(!RespValue::Map(Some(vec![(
-            RespValue::SimpleString(Cow::Borrowed("key")),
-            RespValue::SimpleString(Cow::Borrowed("value"))
-        )]))
-        .is_none());
+        assert!(
+            !RespValue::Map(Some(vec![(
+                RespValue::SimpleString(Cow::Borrowed("key")),
+                RespValue::SimpleString(Cow::Borrowed("value"))
+            )]))
+            .is_none()
+        );
     }
 
     #[test]

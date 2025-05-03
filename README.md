@@ -5,7 +5,8 @@ StreamRESP is a RESP (Redis Serialization Protocol) parser **fully compliant wit
 - **Full RESP3 support:** All RESP3 types are supported.
 - **Optional explicit positive integer sign:** Enable the `explicit-positive-sign` feature to support parsing integers with an explicit `+` sign (e.g., `:+123\r\n`).
 
-Documentation: [DeepWiki](https://deepwiki.com/daydaydrunk/stream_resp)
+## Documentation
+ [DeepWiki](https://deepwiki.com/daydaydrunk/stream_resp)
 
 ## Installation
 
@@ -42,12 +43,79 @@ stream_resp = { version = "1", features = ["jemalloc", "explicit-positive-sign"]
 Here are some examples demonstrating how to use the `stream_resp` parser.
 
 ### Example 1: Basic Usages
+
+#### Creating RESP Values using `From`
+
 ```rust
-let value = RespValue::Array(Some(vec![RespValue::Integer(1), RespValue::Integer(2)]));
-assert_eq!(value.as_bytes(), b"*2\r\n:1\r\n:2\r\n");
+use std::borrow::Cow;
+use stream_resp::resp::RespValue;
+
+// From String/&str (becomes SimpleString)
+let simple_str: RespValue = "OK".into();
+assert_eq!(simple_str, RespValue::SimpleString(Cow::Borrowed("OK")));
+
+let simple_string: RespValue = String::from("Hello").into();
+assert_eq!(simple_string, RespValue::SimpleString(Cow::Owned("Hello".to_string())));
+
+// From i64
+let integer: RespValue = 123.into();
+assert_eq!(integer, RespValue::Integer(123));
+
+// From Option<String> (becomes BulkString)
+let bulk_some: RespValue = Some("data".to_string()).into();
+assert_eq!(bulk_some, RespValue::BulkString(Some(Cow::Owned("data".to_string()))));
+
+let bulk_none: RespValue = None::<String>.into();
+assert_eq!(bulk_none, RespValue::BulkString(None));
+
+// From Vec<RespValue> (becomes Array)
+let array: RespValue = vec![RespValue::Integer(1), "two".into()].into();
+assert_eq!(array, RespValue::Array(Some(vec![
+    RespValue::Integer(1),
+    RespValue::SimpleString(Cow::Borrowed("two"))
+])));
+
+// Other From implementations exist for bool, f64, Vec<(RespValue, RespValue)> (Map), etc.
 ```
 
-### Example 1: Streaming RESP Messages over TCP
+#### Representing Redis Commands
+
+```rust
+use std::borrow::Cow;
+use stream_resp::resp::RespValue;
+
+// Representing the Redis command: SET mykey "Hello"
+let command = RespValue::Array(Some(vec![
+    RespValue::BulkString(Some(Cow::Borrowed("SET"))),
+    RespValue::BulkString(Some(Cow::Borrowed("mykey"))),
+    RespValue::BulkString(Some(Cow::Borrowed("Hello"))),
+]));
+
+// Get the RESP byte representation
+let expected_bytes = b"*3\r\n$3\r\nSET\r\n$5\r\nmykey\r\n$5\r\nHello\r\n";
+assert_eq!(command.as_bytes(), expected_bytes);
+
+println!("Command: {:?}", command);
+println!("RESP Bytes: {:?}", String::from_utf8_lossy(&command.as_bytes()));
+```
+
+#### Converting RESP Values using `Into` 
+
+```rust
+use std::borrow::Cow;
+use stream_resp::resp::RespValue;
+
+let simple_string = RespValue::SimpleString(Cow::Borrowed("OK"));
+let ok_str: String = simple_string.into(); 
+assert_eq!(ok_str, "OK");
+
+let integer = RespValue::Integer(42);
+let num: i64 = integer.into(); 
+assert_eq!(num, 42);
+
+```
+
+### Example 2: Streaming RESP Messages over TCP
 ```rust
 use std::net::{TcpListener, TcpStream};
 use std::io::{Read, Write};
@@ -99,7 +167,7 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-### Example 2: Parsing Complete RESP Messages
+### Example 3: Parsing Complete RESP Messages
 
 ```rust
 use std::borrow::Cow;
@@ -130,7 +198,7 @@ fn main() {
 }
 ```
 
-### Example 3: Parsing Incomplete RESP Messages in Chunks
+### Example 4: Parsing Incomplete RESP Messages in Chunks
 
 ```rust
 use std::borrow::Cow;
